@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -27,6 +28,35 @@ def load_document(path: Path) -> dict[str, Any]:
 class SnsConfig:
     topic_name: str
     email: str
+    enabled: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class TelegramConfig:
+    chat_id: str
+    bot_token: str | None = None
+    bot_token_env: str | None = None
+    enabled: bool = True
+
+    def __post_init__(self) -> None:
+        if self.enabled and not self.chat_id:
+            raise ValueError("telegram chat_id must not be empty")
+        if self.enabled and bool(self.bot_token) == bool(self.bot_token_env):
+            raise ValueError(
+                "telegram must define exactly one of bot_token or bot_token_env"
+            )
+
+    def resolve_bot_token(self) -> str:
+        if self.bot_token:
+            return self.bot_token
+        if not self.bot_token_env:
+            raise RuntimeError("Telegram bot token is not configured")
+        token = os.environ.get(self.bot_token_env)
+        if not token:
+            raise RuntimeError(
+                f"Telegram bot token environment variable {self.bot_token_env!r} is not set"
+            )
+        return token
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,8 +111,9 @@ class AwsWorkerConfig:
     sync_models: bool
     upload_results: bool
     local: LocalWorkspaceConfig
-    sns: SnsConfig
+    sns: SnsConfig | None
     sagemaker: SageMakerAppConfig
+    telegram: TelegramConfig | None = None
 
     def __post_init__(self) -> None:
         if self.shutdown_on not in VALID_SHUTDOWN_POLICIES:
@@ -125,10 +156,16 @@ class AwsWorkerConfig:
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "AwsWorkerConfig":
-        sns_payload = payload.get("sns") or {
-            "topic_name": payload["sns_topic_name"],
-            "email": payload["notification_email"],
-        }
+        notifications = payload.get("notifications") or {}
+        sns_payload = notifications.get("email", payload.get("sns"))
+        if sns_payload is None and payload.get("sns_topic_name") and payload.get(
+            "notification_email"
+        ):
+            sns_payload = {
+                "topic_name": payload["sns_topic_name"],
+                "email": payload["notification_email"],
+            }
+        telegram_payload = notifications.get("telegram", payload.get("telegram"))
         sagemaker_payload = payload.get("sagemaker") or {
             "domain_id": payload["sagemaker_domain_id"],
             "space_name": payload["sagemaker_space_name"],
@@ -146,7 +183,8 @@ class AwsWorkerConfig:
             sync_models=bool(payload.get("sync_models", True)),
             upload_results=bool(payload.get("upload_results", True)),
             local=LocalWorkspaceConfig(**payload["local"]),
-            sns=SnsConfig(**sns_payload),
+            sns=SnsConfig(**sns_payload) if sns_payload else None,
+            telegram=TelegramConfig(**telegram_payload) if telegram_payload else None,
             sagemaker=SageMakerAppConfig(**sagemaker_payload),
         )
 

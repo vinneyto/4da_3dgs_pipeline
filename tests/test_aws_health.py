@@ -1,8 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
-
-import pytest
 
 from fourda_aws_worker import aws
 from fourda_aws_worker.config import (
@@ -10,11 +9,17 @@ from fourda_aws_worker.config import (
     LocalWorkspaceConfig,
     SageMakerAppConfig,
     SnsConfig,
+    TelegramConfig,
 )
 
 
 class FakeClient:
-    def __init__(self, service: str, *, subscription_arn: str = "confirmed-subscription"):
+    def __init__(
+        self,
+        service: str,
+        *,
+        subscription_arn: str = "arn:aws:sns:test:subscription",
+    ):
         self.service = service
         self.subscription_arn = subscription_arn
         self.calls: list[tuple[str, dict]] = []
@@ -67,7 +72,7 @@ class FakeClient:
 
 
 class FakeBoto3:
-    def __init__(self, *, subscription_arn: str = "confirmed-subscription"):
+    def __init__(self, *, subscription_arn: str = "arn:aws:sns:test:subscription"):
         self.clients = {
             name: FakeClient(name, subscription_arn=subscription_arn)
             for name in ("sts", "s3", "sns", "sagemaker")
@@ -103,7 +108,12 @@ class FakeDownloadS3(FakeClient):
         return FakePaginator()
 
 
-def make_config(tmp_path: Path, *, shutdown_on: str = "success") -> AwsWorkerConfig:
+def make_config(
+    tmp_path: Path,
+    *,
+    shutdown_on: str = "success",
+    telegram: TelegramConfig | None = None,
+) -> AwsWorkerConfig:
     return AwsWorkerConfig(
         job_id="job-01",
         shutdown_on=shutdown_on,
@@ -123,6 +133,7 @@ def make_config(tmp_path: Path, *, shutdown_on: str = "success") -> AwsWorkerCon
         sagemaker=SageMakerAppConfig(
             domain_id="d-test", space_name="space-test", app_name="default"
         ),
+        telegram=telegram,
     )
 
 
@@ -146,14 +157,66 @@ def test_health_check_validates_aws_and_sends_start_notification(monkeypatch, tm
     assert publish[0][1]["Subject"] == "4DAnyone AWS job started: job-01"
 
 
-def test_health_check_rejects_pending_email_subscription(monkeypatch, tmp_path) -> None:
+def test_health_check_reports_pending_email_without_blocking(monkeypatch, tmp_path) -> None:
     fake = FakeBoto3(subscription_arn="PendingConfirmation")
     monkeypatch.setattr(aws, "_boto3", lambda: fake)
 
-    with pytest.raises(RuntimeError, match="pending confirmation"):
-        aws.run_health_check(make_config(tmp_path), "job-01")
+    result = aws.run_health_check(make_config(tmp_path), "job-01")
 
+    assert "PendingConfirmation" in result.email_status
     assert not [call for call in fake.clients["sns"].calls if call[0] == "publish"]
+
+
+def test_health_check_treats_deleted_email_as_unavailable(monkeypatch, tmp_path) -> None:
+    fake = FakeBoto3(subscription_arn="Deleted")
+    monkeypatch.setattr(aws, "_boto3", lambda: fake)
+
+    result = aws.run_health_check(make_config(tmp_path), "job-01")
+
+    assert "Deleted" in result.email_status
+
+
+def test_health_check_validates_optional_telegram(monkeypatch, tmp_path) -> None:
+    fake = FakeBoto3()
+    monkeypatch.setattr(aws, "_boto3", lambda: fake)
+    monkeypatch.setattr(aws, "_check_telegram", lambda _config: "123456")
+    config = make_config(
+        tmp_path,
+        telegram=TelegramConfig(chat_id="123456", bot_token="test-token"),
+    )
+
+    result = aws.run_health_check(config, "job-01")
+
+    assert result.telegram_status == "ready (chat 123456)"
+
+
+def test_health_check_supports_no_notification_channels(monkeypatch, tmp_path) -> None:
+    fake = FakeBoto3()
+    monkeypatch.setattr(aws, "_boto3", lambda: fake)
+    config = replace(make_config(tmp_path), sns=None)
+
+    result = aws.run_health_check(config, "job-01")
+
+    assert result.email_status == "disabled"
+    assert result.telegram_status == "disabled"
+    assert fake.clients["sns"].calls == []
+
+
+def test_notification_failure_is_returned_instead_of_raised(monkeypatch, tmp_path) -> None:
+    config = replace(make_config(tmp_path), sns=None)
+    config = replace(
+        config,
+        telegram=TelegramConfig(chat_id="123456", bot_token="invalid-token"),
+    )
+    monkeypatch.setattr(
+        aws,
+        "_publish_telegram",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("denied")),
+    )
+
+    result = aws.publish_notification(config, "subject", "message")
+
+    assert result == {"telegram": "skipped: denied"}
 
 
 def test_health_check_skips_sagemaker_when_shutdown_is_disabled(monkeypatch, tmp_path) -> None:

@@ -1,4 +1,4 @@
-"""AWS API adapter for S3, SNS, and SageMaker operations."""
+"""Service adapters for S3, SNS, Telegram, and SageMaker operations."""
 
 from __future__ import annotations
 
@@ -6,6 +6,9 @@ import json
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 from .config import AwsWorkerConfig, SageMakerAppConfig
 
@@ -19,6 +22,8 @@ def _boto3():
 
 
 def configure_email(config: AwsWorkerConfig) -> dict[str, str]:
+    if config.sns is None:
+        raise ValueError("email notifications are not configured")
     sns = _boto3().client("sns", region_name=config.region)
     topic_arn = sns.create_topic(
         Name=config.sns.topic_name,
@@ -42,22 +47,78 @@ def configure_email(config: AwsWorkerConfig) -> dict[str, str]:
 
 
 def topic_arn(config: AwsWorkerConfig) -> str:
+    if config.sns is None:
+        raise ValueError("email notifications are not configured")
     return _boto3().client("sns", region_name=config.region).create_topic(
         Name=config.sns.topic_name
     )["TopicArn"]
 
 
-def publish_notification(config: AwsWorkerConfig, subject: str, message: str) -> None:
-    _boto3().client("sns", region_name=config.region).publish(
-        TopicArn=topic_arn(config),
-        Subject=subject[:100],
-        Message=message,
+def _telegram_request(config: AwsWorkerConfig, method: str, payload: dict[str, str]) -> Any:
+    if config.telegram is None:
+        raise ValueError("Telegram notifications are not configured")
+    token = config.telegram.resolve_bot_token()
+    request = Request(
+        f"https://api.telegram.org/bot{token}/{method}",
+        data=urlencode(payload).encode("utf-8"),
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=15) as response:
+            result = json.loads(response.read())
+    except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as error:
+        # Do not chain urllib exceptions: their URL contains the secret bot token.
+        raise RuntimeError(
+            f"Telegram API {method} request failed: {type(error).__name__}"
+        ) from None
+    if not result.get("ok"):
+        raise RuntimeError(
+            f"Telegram API {method} rejected the request: {result.get('description', 'unknown error')}"
+        )
+    return result.get("result")
+
+
+def _check_telegram(config: AwsWorkerConfig) -> str:
+    assert config.telegram is not None
+    chat = _telegram_request(config, "getChat", {"chat_id": config.telegram.chat_id})
+    return str(chat.get("id", config.telegram.chat_id))
+
+
+def _publish_telegram(config: AwsWorkerConfig, subject: str, message: str) -> None:
+    assert config.telegram is not None
+    text = f"{subject}\n\n{message}"
+    _telegram_request(
+        config,
+        "sendMessage",
+        {"chat_id": config.telegram.chat_id, "text": text[:4096]},
     )
 
 
-def publish_completion(config: AwsWorkerConfig, subject: str, message: str) -> None:
+def publish_notification(config: AwsWorkerConfig, subject: str, message: str) -> dict[str, str]:
+    """Publish to every enabled channel without making notifications job-critical."""
+    outcomes: dict[str, str] = {}
+    if config.sns is not None and config.sns.enabled:
+        try:
+            sns = _boto3().client("sns", region_name=config.region)
+            arn = topic_arn(config)
+            _confirmed_email_subscription(sns, arn, config.sns.email)
+            sns.publish(TopicArn=arn, Subject=subject[:100], Message=message)
+            outcomes["email"] = "sent"
+        except Exception as error:
+            outcomes["email"] = f"skipped: {error}"
+    if config.telegram is not None and config.telegram.enabled:
+        try:
+            _publish_telegram(config, subject, message)
+            outcomes["telegram"] = "sent"
+        except Exception as error:
+            outcomes["telegram"] = f"skipped: {error}"
+    return outcomes
+
+
+def publish_completion(config: AwsWorkerConfig, subject: str, message: str) -> dict[str, str]:
     """Backward-compatible name for completion/failure notifications."""
-    publish_notification(config, subject, message)
+    return publish_notification(config, subject, message)
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,8 +127,10 @@ class AwsHealthCheckResult:
     caller_arn: str
     bucket: str
     writable_prefixes: tuple[str, ...]
-    topic_arn: str
-    subscription_arn: str
+    topic_arn: str | None
+    subscription_arn: str | None
+    email_status: str
+    telegram_status: str
     sagemaker_app_status: str | None
     video_s3_uri: str
     model_object_count: int
@@ -75,7 +138,7 @@ class AwsHealthCheckResult:
 
 def _confirmed_email_subscription(sns: Any, arn: str, email: str) -> str:
     next_token: str | None = None
-    pending = False
+    observed_state: str | None = None
     while True:
         arguments = {"TopicArn": arn}
         if next_token:
@@ -87,14 +150,14 @@ def _confirmed_email_subscription(sns: Any, arn: str, email: str) -> str:
                 and subscription.get("Endpoint", "").casefold() == email.casefold()
             ):
                 subscription_arn = subscription.get("SubscriptionArn", "")
-                if subscription_arn and subscription_arn != "PendingConfirmation":
+                if subscription_arn.startswith("arn:"):
                     return subscription_arn
-                pending = True
+                observed_state = subscription_arn or "unknown"
         next_token = response.get("NextToken")
         if not next_token:
             break
 
-    state = "pending confirmation" if pending else "missing"
+    state = observed_state or "missing"
     raise RuntimeError(
         f"SNS email subscription for {email} is {state}. Run "
         "'fourda-aws-worker configure-email --config <path>' and confirm the email "
@@ -146,9 +209,25 @@ def run_health_check(config: AwsWorkerConfig, job_id: str) -> AwsHealthCheckResu
     if config.upload_results:
         prefixes.append(_probe_s3_prefix(s3, config, config.runs_prefix, job_id))
 
-    sns = boto3.client("sns", region_name=config.region)
-    arn = sns.create_topic(Name=config.sns.topic_name)["TopicArn"]
-    subscription_arn = _confirmed_email_subscription(sns, arn, config.sns.email)
+    arn: str | None = None
+    subscription_arn: str | None = None
+    email_status = "disabled"
+    if config.sns is not None and config.sns.enabled:
+        try:
+            sns = boto3.client("sns", region_name=config.region)
+            arn = sns.create_topic(Name=config.sns.topic_name)["TopicArn"]
+            subscription_arn = _confirmed_email_subscription(sns, arn, config.sns.email)
+            email_status = "ready"
+        except Exception as error:
+            email_status = f"unavailable: {error}"
+
+    telegram_status = "disabled"
+    if config.telegram is not None and config.telegram.enabled:
+        try:
+            chat_id = _check_telegram(config)
+            telegram_status = f"ready (chat {chat_id})"
+        except Exception as error:
+            telegram_status = f"unavailable: {error}"
 
     app_status: str | None = None
     if config.shutdown_on != "never":
@@ -171,6 +250,8 @@ def run_health_check(config: AwsWorkerConfig, job_id: str) -> AwsHealthCheckResu
         writable_prefixes=tuple(prefixes),
         topic_arn=arn,
         subscription_arn=subscription_arn,
+        email_status=email_status,
+        telegram_status=telegram_status,
         sagemaker_app_status=app_status,
         video_s3_uri=config.video_s3_uri,
         model_object_count=model_object_count,
@@ -180,8 +261,8 @@ def run_health_check(config: AwsWorkerConfig, job_id: str) -> AwsHealthCheckResu
 
 def publish_started(
     config: AwsWorkerConfig, result: AwsHealthCheckResult, experiment_name: str
-) -> None:
-    publish_notification(
+) -> dict[str, str]:
+    return publish_notification(
         config,
         f"4DAnyone AWS job started: {config.job_id}",
         "\n".join(
@@ -193,7 +274,8 @@ def publish_started(
                 f"S3 input: {result.video_s3_uri}",
                 f"Local input: {config.local_video_path}",
                 f"Model objects visible in S3: {result.model_object_count}",
-                f"SNS topic: {result.topic_arn}",
+                f"Email notifications: {result.email_status}",
+                f"Telegram notifications: {result.telegram_status}",
                 f"SageMaker App: {result.sagemaker_app_status or 'shutdown disabled'}",
                 "Input staging completed. The 4DAnyone pipeline is starting now.",
             ]

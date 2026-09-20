@@ -10,7 +10,7 @@ The repository deliberately separates the local pipeline from AWS orchestration.
 |---|---|---|
 | `FourDAnyonePipeline` | 4DAnyone inference and local Nerfstudio/3DGS export | None |
 | `fourda-pipeline` | Blocking local CLI around `FourDAnyonePipeline` | None |
-| `fourda-aws-worker` | AWS-specific detached execution, durable job status, S3 staging/result upload, SNS email, SageMaker App shutdown | Optional `[aws]` extra |
+| `fourda-aws-worker` | AWS-specific detached execution, durable job status, S3 staging/result upload, optional email/Telegram notifications, SageMaker App shutdown | Optional `[aws]` extra |
 
 `fourda-pipeline` never imports `boto3`, reads environment variables, uploads files, or calls an AWS API. The same core can run on a workstation, another cloud provider, or inside a future managed SageMaker Job.
 
@@ -161,8 +161,8 @@ fourda-worker-config \
   --views-per-layer 24 \
   --layer-pitches 0 \
   --frame 60 \
-  --sns-topic-name cp-4da-pipeline-d9f856354df8 \
-  --notification-email YOUR_EMAIL \
+  --telegram-chat-id YOUR_TELEGRAM_CHAT_ID \
+  --telegram-bot-token-env CP_4DA_TELEGRAM_BOT_TOKEN \
   --sagemaker-domain-id d-x1ij0jwvo44o \
   --sagemaker-space-name cp-4da-jupyter-d9f856354df8
 
@@ -204,18 +204,18 @@ The job layer:
 2. downloads `aws_worker.s3_video_path` into `<data_root>/input/`, reusing a matching local file;
 3. synchronizes S3 model objects into `<data_root>/models/`, reusing the persistent cache;
 4. derives the full local pipeline configuration and validates its paths;
-5. sends an SNS `job started` email only after staging succeeds;
+5. sends optional email and/or Telegram `job started` notifications after staging succeeds;
 6. starts the AWS-independent core pipeline;
 7. records stage-based progress in `<data_root>/jobs/<job_id>/status.json`;
 8. uploads the completed experiment to `s3://<bucket>/<runs_prefix>/<experiment_name>/` when `aws_worker.upload_results` is `true`;
-9. sends an SNS success or failure email;
+9. sends optional email and/or Telegram success or failure notifications;
 10. applies `aws_worker.shutdown_on` and optionally stops the SageMaker JupyterLab App.
 
 The startup health check validates the current STS identity, bucket access, the exact S3
-video object, model-prefix listing, result-prefix `PutObject`, a confirmed SNS subscription
-for the configured email address, and the configured SageMaker App when automatic shutdown
-is enabled. If any mandatory check, staging operation, path validation, or startup SNS
-publish fails, inference does not start and the durable job status becomes `failed`.
+video object, model-prefix listing, result-prefix `PutObject`, optional notification channels,
+and the configured SageMaker App when automatic shutdown is enabled. Notification failures
+are recorded as warnings and never block inference. Any mandatory AWS check, staging
+operation, or path validation failure prevents inference and marks the durable job failed.
 
 Progress reflects native 4DAnyone stages, not an exact remaining-time estimate.
 
@@ -231,19 +231,59 @@ Valid shutdown policies are:
 
 Shutdown uses SageMaker `DeleteApp`. It stops compute without deleting the Space or its persistent EBS volume.
 
-## Amazon SNS email
+## Notifications
+
+Both notification channels are optional and independent. If neither is configured, the
+worker still runs normally. A missing, deleted, or pending email subscription and a broken
+Telegram configuration are reported in the job log but do not block GPU work.
+
+### Telegram
+
+Create a bot with `@BotFather`, send the bot one message, and obtain the destination
+`chat_id`. Keep the token out of JSON and Git:
+
+```bash
+export CP_4DA_TELEGRAM_BOT_TOKEN="REPLACE_WITH_BOT_TOKEN"
+```
+
+Persist that export in the SageMaker Space's `~/.bashrc`, then configure:
+
+```json
+"notifications": {
+  "email": null,
+  "telegram": {
+    "enabled": true,
+    "chat_id": "REPLACE_WITH_CHAT_ID",
+    "bot_token_env": "CP_4DA_TELEGRAM_BOT_TOKEN"
+  }
+}
+```
+
+The worker validates the bot and chat with `getChat` during its health check and uses
+`sendMessage` for start, success, and failure messages. A literal `bot_token` is also
+accepted instead of `bot_token_env`, but it writes the secret into the run document and
+detached job request and is therefore not recommended.
+
+### Amazon SNS email
 
 The execution role must allow `sns:CreateTopic`, `sns:Subscribe`, `sns:Publish`, and
-`sns:ListSubscriptionsByTopic`. Configure `aws_worker.sns_topic_name` and
-`aws_worker.notification_email`, then run:
+`sns:ListSubscriptionsByTopic`. Configure the optional email channel, then run:
+
+```json
+"email": {
+  "enabled": true,
+  "topic_name": "cp-4da-pipeline-DEPLOYMENT_ID",
+  "email": "you@example.com"
+}
+```
 
 ```bash
 fourda-aws-worker configure-email --config config/run.json
 ```
 
-Confirm the AWS `Subscription Confirmation` email before starting a job. The worker refuses
-to start the pipeline while the configured subscription is missing or pending. No second
-AWS configuration file is created; the run JSON remains the single source of truth.
+Confirm the AWS `Subscription Confirmation` email to receive messages. The worker continues
+when that subscription is missing, deleted, or pending. No second AWS configuration file is
+created; the run JSON remains the single source of truth.
 
 Automatic shutdown additionally requires `sagemaker:DeleteApp`. Domain ID, Space name,
 and App name are read from the `aws_worker.sagemaker_*` fields in the same JSON document.

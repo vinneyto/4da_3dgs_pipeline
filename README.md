@@ -145,6 +145,41 @@ performs no AWS operations. It writes the selected synchronized moment to:
 
 Set `pipeline.resume` to `true` to reuse successfully completed intermediate outputs. When it is `false`, existing output directories are protected against accidental overwrite.
 
+## Generate an AWS run document
+
+`fourda-worker-config` turns CLI arguments into the validated JSON document consumed by
+the detached worker. The JSON remains the durable, inspectable handoff: generating it does
+not call AWS or start a job.
+
+Generate the one-layer, 24-view smoke run:
+
+```bash
+fourda-worker-config \
+  --output config/run.json \
+  --experiment-name leo_one_layer_24views_01 \
+  --s3-video-path s3://cp-4da-d9f856354df8/input/leo.MOV \
+  --views-per-layer 24 \
+  --layer-pitches 0 \
+  --frame 60 \
+  --sns-topic-name cp-4da-pipeline-d9f856354df8 \
+  --notification-email YOUR_EMAIL \
+  --sagemaker-domain-id d-x1ij0jwvo44o \
+  --sagemaker-space-name cp-4da-jupyter-d9f856354df8
+
+python -m json.tool config/run.json
+```
+
+The bucket is inferred from a full `s3://` video URI. `job_id` defaults to the experiment
+name, while region, persistent SageMaker paths, S3 prefixes, frame, FPS, seed, turbo mode,
+and shutdown policy have the defaults shown by `fourda-worker-config --help`. Pass
+`--force` to intentionally replace an existing document.
+
+For a later three-layer run, choose a new experiment name and pass:
+
+```bash
+--layer-pitches -15 0 15
+```
+
 ## AWS-aware background job
 
 Start the detached worker:

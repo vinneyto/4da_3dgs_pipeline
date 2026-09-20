@@ -35,3 +35,4 @@ def test_export_command_uses_official_exporter(tmp_path: Path) -> None:
     assert command[1].endswith("scripts/export_nerfstudio.py")
     assert command[command.index("--frame_index") + 1] == "60"
     assert command[command.index("--device") + 1] == "cuda:0"
+    assert command[command.index("--data_dir") + 1].endswith("runs/test/4danyone")

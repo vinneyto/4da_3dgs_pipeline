@@ -1,5 +1,5 @@
 {
-  "schema_version": 5,
+  "schema_version": 6,
   "experiment_name": "leo_one_layer_24views_01",
   "pipeline": {
     "dataset": {
@@ -18,8 +18,6 @@
         "seed": 42,
         "enable_turbo": true,
         "attention_backend": "auto",
-        "frame_indices": [60],
-        "export_device": "cuda:0",
         "resume": false
       }
     },
@@ -31,6 +29,13 @@
   },
   "artifacts": {
     "dataset": {
+      "nerfstudio": {
+        "enabled": true,
+        "source_experiment_name": "leo_one_layer_24views_01",
+        "frames": [60],
+        "device": "cuda:0",
+        "replace_existing": false
+      },
       "rerun": {
         "enabled": false,
         "source_experiment_name": "leo_one_layer_24views_01",

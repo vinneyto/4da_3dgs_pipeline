@@ -95,6 +95,19 @@ class FakePaginator:
         ]
 
 
+class FakeExperimentPaginator:
+    def paginate(self, **kwargs):
+        prefix = kwargs["Prefix"]
+        return [
+            {
+                "Contents": [
+                    {"Key": f"{prefix}4danyone/metadata.json", "Size": 4},
+                    {"Key": f"{prefix}4danyone/cameras.json", "Size": 4},
+                ]
+            }
+        ]
+
+
 class FakeDownloadS3(FakeClient):
     def head_object(self, **kwargs):
         self._record("head_object", kwargs)
@@ -107,6 +120,12 @@ class FakeDownloadS3(FakeClient):
     def get_paginator(self, name):
         assert name == "list_objects_v2"
         return FakePaginator()
+
+
+class FakeExperimentS3(FakeDownloadS3):
+    def get_paginator(self, name):
+        assert name == "list_objects_v2"
+        return FakeExperimentPaginator()
 
 
 def make_config(
@@ -256,3 +275,21 @@ def test_worker_syncs_changed_model_objects(monkeypatch, tmp_path) -> None:
 
     assert (found, downloaded) == (1, 1)
     assert (tmp_path / "data/models/checkpoint.bin").read_bytes() == b"data"
+
+
+def test_worker_restores_prior_experiment_for_artifact_only_run(
+    monkeypatch, tmp_path
+) -> None:
+    fake = FakeBoto3()
+    fake.clients["s3"] = FakeExperimentS3("s3")
+    monkeypatch.setattr(aws, "_boto3", lambda: fake)
+    config = make_config(tmp_path)
+    destination = tmp_path / "data/runs/leo-original"
+
+    found, downloaded = aws.sync_experiment_results(
+        config, "leo-original", destination
+    )
+
+    assert (found, downloaded) == (2, 2)
+    assert (destination / "4danyone/metadata.json").read_bytes() == b"data"
+    assert (destination / "4danyone/cameras.json").read_bytes() == b"data"

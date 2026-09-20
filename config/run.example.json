@@ -1,5 +1,5 @@
 {
-  "schema_version": 4,
+  "schema_version": 5,
   "environment": {
     "conda_bootstrap": "/opt/conda/etc/profile.d/conda.sh",
     "conda_env": "/home/sagemaker-user/.conda/envs/4danyone",
@@ -13,8 +13,8 @@
     "opencv_fallback_version": "4.14.0.94",
     "lock_file": "/home/sagemaker-user/4danyone-data/environment/requirements-lock.txt"
   },
+  "experiment_name": "leo_one_layer_24views_01",
   "pipeline": {
-    "experiment_name": "leo_one_layer_24views_01",
     "dataset": {
       "enabled": true,
       "type": "4danyone",
@@ -30,25 +30,31 @@
         "frame": 60,
         "export_device": "cuda:0",
         "resume": false
-      },
-      "artifacts": {
-        "rerun": {
-          "enabled": true,
-          "view_count": 4,
-          "device": "auto"
-        }
       }
     },
     "reconstruction": {
       "enabled": false,
       "type": "nerfstudio_splatfacto",
-      "config": {},
-      "artifacts": {
-        "rerun": {
-          "enabled": false,
-          "view_count": 4,
-          "device": "auto"
-        }
+      "config": {}
+    }
+  },
+  "artifacts": {
+    "dataset": {
+      "rerun": {
+        "enabled": true,
+        "source_experiment_name": "leo_one_layer_24views_01",
+        "view_count": 4,
+        "device": "auto",
+        "replace_existing": false
+      }
+    },
+    "reconstruction": {
+      "rerun": {
+        "enabled": false,
+        "source_experiment_name": "leo_one_layer_24views_01",
+        "view_count": 4,
+        "device": "auto",
+        "replace_existing": false
       }
     }
   },

@@ -1,7 +1,7 @@
 {
-  "schema_version": 4,
+  "schema_version": 5,
+  "experiment_name": "leo_one_layer_24views_01",
   "pipeline": {
-    "experiment_name": "leo_one_layer_24views_01",
     "dataset": {
       "enabled": true,
       "type": "4danyone",
@@ -21,23 +21,31 @@
         "frame_indices": [60],
         "export_device": "cuda:0",
         "resume": false
-      },
-      "artifacts": {
-        "rerun": {
-          "enabled": false
-        }
       }
     },
     "reconstruction": {
       "enabled": false,
       "type": "nerfstudio_splatfacto",
-      "config": {},
-      "artifacts": {
-        "rerun": {
-          "enabled": false,
-          "view_count": 4,
-          "device": "auto"
-        }
+      "config": {}
+    }
+  },
+  "artifacts": {
+    "dataset": {
+      "rerun": {
+        "enabled": false,
+        "source_experiment_name": "leo_one_layer_24views_01",
+        "view_count": 4,
+        "device": "auto",
+        "replace_existing": false
+      }
+    },
+    "reconstruction": {
+      "rerun": {
+        "enabled": false,
+        "source_experiment_name": "leo_one_layer_24views_01",
+        "view_count": 4,
+        "device": "auto",
+        "replace_existing": false
       }
     }
   }

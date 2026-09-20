@@ -13,7 +13,7 @@ from fourda_pipeline.config import FourDAnyoneConfig, extract_4danyone_dataset_c
 
 
 VALID_SHUTDOWN_POLICIES = frozenset({"never", "success", "always"})
-SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4})
+SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5})
 
 
 def load_document(path: Path) -> dict[str, Any]:
@@ -287,10 +287,15 @@ class AwsWorkerConfig:
 
 
 def materialize_pipeline_config(
-    pipeline_payload: dict[str, Any], worker: AwsWorkerConfig
+    document: dict[str, Any], worker: AwsWorkerConfig
 ) -> FourDAnyoneConfig:
     """Complete an AWS run's path-free pipeline section with staged local paths."""
-    payload = extract_4danyone_dataset_config(pipeline_payload)
+    pipeline_payload = document.get("pipeline", document)
+    payload = extract_4danyone_dataset_config(
+        pipeline_payload,
+        experiment_name=document.get("experiment_name"),
+        artifacts=document.get("artifacts"),
+    )
     if "frame" in payload:
         if "frame_indices" in payload:
             raise ValueError("pipeline must use either frame or frame_indices, not both")
@@ -311,8 +316,7 @@ def materialize_pipeline_config(
 def load_aws_worker_config(path: Path) -> tuple[FourDAnyoneConfig, AwsWorkerConfig]:
     document = load_document(path)
     worker = AwsWorkerConfig.from_document(document)
-    try:
-        pipeline_payload = document["pipeline"]
-    except KeyError as error:
+    if "pipeline" not in document:
+        error = KeyError("pipeline")
         raise ValueError("config must contain a pipeline object") from error
-    return materialize_pipeline_config(pipeline_payload, worker), worker
+    return materialize_pipeline_config(document, worker), worker

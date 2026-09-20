@@ -192,7 +192,12 @@ def _probe_s3_prefix(s3: Any, config: AwsWorkerConfig, prefix: str, job_id: str)
     return prefix
 
 
-def run_health_check(config: AwsWorkerConfig, job_id: str) -> AwsHealthCheckResult:
+def run_health_check(
+    config: AwsWorkerConfig,
+    job_id: str,
+    *,
+    require_input_video: bool = True,
+) -> AwsHealthCheckResult:
     """Validate every AWS dependency before expensive pipeline work begins."""
     boto3 = _boto3()
 
@@ -201,7 +206,8 @@ def run_health_check(config: AwsWorkerConfig, job_id: str) -> AwsHealthCheckResu
     s3 = boto3.client("s3", region_name=config.region)
     s3.head_bucket(Bucket=config.bucket_name)
     video_bucket, video_key = config.video_s3_location
-    s3.head_object(Bucket=video_bucket, Key=video_key)
+    if require_input_video:
+        s3.head_object(Bucket=video_bucket, Key=video_key)
 
     model_object_count = 0
     if config.sync_models:
@@ -284,7 +290,7 @@ def publish_started(
                 f"Email notifications: {result.email_status}",
                 f"Telegram notifications: {result.telegram_status}",
                 f"SageMaker App: {result.sagemaker_app_status or 'shutdown disabled'}",
-                "Input staging completed. The 4DAnyone pipeline is starting now.",
+                "Required inputs are staged. The configured tasks are starting now.",
             ]
         ),
     )
@@ -332,6 +338,45 @@ def sync_model_objects(config: AwsWorkerConfig) -> tuple[int, int]:
             client.download_file(config.bucket_name, key, str(temporary))
             temporary.replace(destination)
             downloaded += 1
+    return found, downloaded
+
+
+def sync_experiment_results(
+    config: AwsWorkerConfig,
+    experiment_name: str,
+    destination: Path,
+) -> tuple[int, int]:
+    """Restore one prior experiment from S3 for artifact-only jobs."""
+    client = _boto3().client("s3", region_name=config.region)
+    prefix = "/".join(
+        part for part in (config.runs_prefix, experiment_name) if part
+    ).rstrip("/") + "/"
+    paginator = client.get_paginator("list_objects_v2")
+    found = 0
+    downloaded = 0
+    destination.mkdir(parents=True, exist_ok=True)
+    for page in paginator.paginate(Bucket=config.bucket_name, Prefix=prefix):
+        for item in page.get("Contents", []):
+            key = item["Key"]
+            relative = key[len(prefix) :]
+            if not relative or relative.endswith("/"):
+                continue
+            relative_path = PurePosixPath(relative)
+            if relative_path.is_absolute() or ".." in relative_path.parts:
+                raise ValueError(f"unsafe experiment object key: {key}")
+            found += 1
+            target = destination.joinpath(*relative_path.parts)
+            if target.is_file() and target.stat().st_size == item["Size"]:
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            temporary = target.with_suffix(target.suffix + ".download")
+            client.download_file(config.bucket_name, key, str(temporary))
+            temporary.replace(target)
+            downloaded += 1
+    if found == 0:
+        raise FileNotFoundError(
+            f"No source experiment objects found at s3://{config.bucket_name}/{prefix}"
+        )
     return found, downloaded
 
 

@@ -91,7 +91,10 @@ def main() -> None:
         load_aws_worker_config(args.config)
         document = load_document(args.config)
         request = {
+            "schema_version": document["schema_version"],
+            "experiment_name": document.get("experiment_name"),
             "pipeline": document["pipeline"],
+            "artifacts": document.get("artifacts"),
             "aws_worker": config.to_dict(),
         }
         status = job.start(request)

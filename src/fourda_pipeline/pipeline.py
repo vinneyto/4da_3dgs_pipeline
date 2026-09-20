@@ -148,9 +148,13 @@ class FourDAnyonePipeline:
             self._progress("rerun", 0.99, "Reusing existing Rerun recording")
             return str(config.rerun_path)
         if config.rerun_path.exists():
-            raise FileExistsError(
-                f"Rerun output already exists: {config.rerun_path}; use --resume to reuse it"
-            )
+            if config.rerun.replace_existing:
+                config.rerun_path.unlink()
+            else:
+                raise FileExistsError(
+                    f"Rerun output already exists: {config.rerun_path}; "
+                    "set artifacts.dataset.rerun.replace_existing=true to replace it"
+                )
 
         from fourda_rerun.exporter import RerunExporter
 
@@ -160,7 +164,7 @@ class FourDAnyonePipeline:
 
         self._progress("rerun", 0.90, "Building camera and skeleton recording")
         output = RerunExporter(
-            generation=config.inference_dir,
+            generation=config.rerun_generation_dir,
             output=config.rerun_path,
             experiment=config.experiment_name,
             fourdanyone_root=config.fourdanyone_root,
@@ -179,8 +183,12 @@ class FourDAnyonePipeline:
         self._progress("validation", 0.05, f"Camera plan: {self.config.num_views} views")
 
         started = datetime.now(UTC)
-        self._run_inference()
-        datasets = self._export_datasets()
+        if self.config.dataset_enabled:
+            self._run_inference()
+            datasets = self._export_datasets()
+        else:
+            datasets = []
+            self._progress("dataset", 0.80, "Dataset stage disabled")
         rerun_file = self._export_rerun()
         finished = datetime.now(UTC)
 

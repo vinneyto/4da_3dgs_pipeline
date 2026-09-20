@@ -14,7 +14,7 @@ from .config import AwsWorkerConfig, materialize_pipeline_config
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="fourda-worker-config",
-        description="Generate a validated schema-v4 JSON document for fourda-aws-worker.",
+        description="Generate a validated schema-v5 JSON document for fourda-aws-worker.",
     )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--force", action="store_true", help="Replace an existing output file")
@@ -62,6 +62,12 @@ def build_parser() -> argparse.ArgumentParser:
     pipeline = parser.add_argument_group("pipeline")
     pipeline.add_argument("--experiment-name", required=True)
     pipeline.add_argument("--job-id", help="Defaults to --experiment-name")
+    pipeline.add_argument(
+        "--dataset",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Run the 4DAnyone dataset stage",
+    )
     pipeline.add_argument("--views-per-layer", type=int, default=24)
     pipeline.add_argument("--layer-pitches", type=int, nargs="+", default=[0])
     pipeline.add_argument("--start-yaw", type=int, default=0)
@@ -81,6 +87,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     pipeline.add_argument("--rerun-view-count", type=int, default=4)
     pipeline.add_argument("--rerun-device", default="auto")
+    pipeline.add_argument(
+        "--rerun-source-experiment-name",
+        help="Defaults to --experiment-name",
+    )
+    pipeline.add_argument(
+        "--rerun-replace-existing",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+    )
 
     aws = parser.add_argument_group("AWS worker")
     video = aws.add_mutually_exclusive_group(required=True)
@@ -185,7 +200,7 @@ def build_document(args: argparse.Namespace) -> dict[str, Any]:
     bucket, video = _resolve_video(args)
     job_id = args.job_id or args.experiment_name
     document: dict[str, Any] = {
-        "schema_version": 4,
+        "schema_version": 5,
         "environment": {
             "conda_bootstrap": str(args.conda_bootstrap),
             "conda_env": str(args.conda_env),
@@ -199,10 +214,10 @@ def build_document(args: argparse.Namespace) -> dict[str, Any]:
             "opencv_fallback_version": args.opencv_fallback_version,
             "lock_file": str(args.lock_file),
         },
+        "experiment_name": args.experiment_name,
         "pipeline": {
-            "experiment_name": args.experiment_name,
             "dataset": {
-                "enabled": True,
+                "enabled": args.dataset,
                 "type": "4danyone",
                 "config": {
                     "views_per_layer": args.views_per_layer,
@@ -217,25 +232,33 @@ def build_document(args: argparse.Namespace) -> dict[str, Any]:
                     "export_device": args.export_device,
                     "resume": args.resume,
                 },
-                "artifacts": {
-                    "rerun": {
-                        "enabled": args.rerun,
-                        "view_count": args.rerun_view_count,
-                        "device": args.rerun_device,
-                    }
-                },
             },
             "reconstruction": {
                 "enabled": False,
                 "type": "nerfstudio_splatfacto",
                 "config": {},
-                "artifacts": {
-                    "rerun": {
-                        "enabled": False,
-                        "view_count": 4,
-                        "device": "auto",
-                    }
-                },
+            },
+        },
+        "artifacts": {
+            "dataset": {
+                "rerun": {
+                    "enabled": args.rerun,
+                    "source_experiment_name": (
+                        args.rerun_source_experiment_name or args.experiment_name
+                    ),
+                    "view_count": args.rerun_view_count,
+                    "device": args.rerun_device,
+                    "replace_existing": args.rerun_replace_existing,
+                }
+            },
+            "reconstruction": {
+                "rerun": {
+                    "enabled": False,
+                    "source_experiment_name": args.experiment_name,
+                    "view_count": 4,
+                    "device": "auto",
+                    "replace_existing": False,
+                }
             },
         },
         "aws_worker": {
@@ -287,7 +310,7 @@ def build_document(args: argparse.Namespace) -> dict[str, Any]:
         },
     }
     worker = AwsWorkerConfig.from_document(document)
-    materialize_pipeline_config(document["pipeline"], worker)
+    materialize_pipeline_config(document, worker)
     return document
 
 
@@ -319,6 +342,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     print(f"Job: {args.job_id or args.experiment_name}")
     print(f"Input: s3://{bucket_config['name']}/{video_key}")
     print(f"Target views: {total_views}")
+    print(f"Dataset stage: {'enabled' if args.dataset else 'disabled'}")
+    print(f"Dataset Rerun artifact: {'enabled' if args.rerun else 'disabled'}")
 
 
 if __name__ == "__main__":

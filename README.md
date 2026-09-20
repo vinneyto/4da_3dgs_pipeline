@@ -1,50 +1,50 @@
 # 4DAnyone → 3DGS pipeline
 
-Python-обвязка для воспроизводимого запуска [4DAnyone](https://github.com/ant-research/4DAnyone) в AWS SageMaker Studio и экспорта одного синхронизированного момента в формат Nerfstudio/3DGS.
+Python orchestration for reproducible [4DAnyone](https://github.com/ant-research/4DAnyone) runs in AWS SageMaker Studio and export of one synchronized moment to the Nerfstudio/3DGS format.
 
-Текущий пайплайн делает следующее:
+The current pipeline:
 
-1. получает одно монокулярное видео;
-2. запускает 4DAnyone с заданной схемой виртуальных камер;
-3. экспортирует выбранный кадр в `transforms.json`, изображения, маски и point cloud;
-4. при необходимости синхронизирует результат в S3;
-5. в фоновом режиме сохраняет статус, пишет лог, отправляет SNS email и может остановить JupyterLab App.
+1. accepts one monocular input video;
+2. runs 4DAnyone with a configurable virtual-camera layout;
+3. exports a selected frame to `transforms.json`, images, masks, and a point cloud;
+4. optionally synchronizes the result to S3;
+5. supports detached execution with durable status, logs, SNS email notifications, and optional JupyterLab App shutdown.
 
-> Сейчас это подготовка **статического** датасета 3DGS для выбранного момента времени. Экспорт всех 121 временных кадров и обучение динамического 4DGS в эту версию не входят.
+> This version prepares a **static** 3DGS dataset for a selected moment in time. Exporting all 121 temporal frames and training a dynamic 4DGS model are outside the current scope.
 
-## Стандартная конфигурация камер
+## Default camera configuration
 
-Значения по умолчанию повторяют проверенный Colab-прогон:
+The defaults reproduce the validated Colab run:
 
-| Параметр | Значение |
+| Parameter | Value |
 |---|---:|
 | `views_per_layer` | 24 |
 | `layer_pitches` | `-15, 0, 15` |
-| Общее число камер | 72 |
+| Total cameras | 72 |
 | `start_yaw` | 0° |
 | `yaw_span` | 360° |
 | `target_fps` | 30 |
 | `seed` | 42 |
-| модель | turbo |
-| экспортируемый кадр | 60 |
+| Model | turbo |
+| Exported frame | 60 |
 
-`RERUN_VIEW_COUNT=4` из Colab не является параметром inference или экспорта 4DAnyone. Это настройка последующей визуализации и в данный CLI не включена.
+`RERUN_VIEW_COUNT=4` from the Colab notebook is not a 4DAnyone inference or export parameter. It belongs to downstream visualization and is therefore not part of this CLI.
 
-## Структура на постоянном диске Space
+## Persistent Space layout
 
 ```text
-~/work/4DAnyone/              upstream 4DAnyone
-~/work/4da_3dgs_pipeline/     этот репозиторий
+~/work/4DAnyone/              upstream 4DAnyone repository
+~/work/4da_3dgs_pipeline/     this repository
 ~/4danyone-data/
 ├── input/
 ├── models/
 ├── runs/
-└── jobs/                     запросы, статусы и логи фоновых задач
+└── jobs/                     background requests, status files, and logs
 ```
 
-Все эти каталоги находятся на 50-гигабайтном EBS-томе Space и сохраняются между остановками JupyterLab App. Сам GPU-инстанс оплачивается только пока App имеет статус `InService`/запущен; плата за EBS-хранилище продолжает начисляться и при остановленном App.
+These directories reside on the Space's persistent 50 GB EBS volume and survive JupyterLab App restarts. GPU instance charges apply only while the App is running; EBS storage charges continue while the App is stopped.
 
-## Установка окружения
+## Environment setup
 
 ```bash
 cd "$HOME/work"
@@ -55,9 +55,9 @@ chmod +x scripts/*.sh
 ./scripts/setup_4danyone_env.sh
 ```
 
-Скрипт создаёт изолированное окружение `$HOME/.conda/envs/4danyone`, ставит совместимую пару CUDA PyTorch/Torchvision, заменяет GUI OpenCV на headless-версию, устанавливает FFmpeg и этот CLI. Его можно выполнить на CPU-инстансе: CUDA-сборка будет проверена после запуска GPU. На GPU скрипт дополнительно проверяет реальный CUDA-вызов.
+The script creates an isolated `$HOME/.conda/envs/4danyone` environment, installs a compatible CUDA PyTorch/Torchvision pair, replaces GUI OpenCV with its headless build, installs FFmpeg, and installs this CLI. It is safe to run on a CPU instance: the CUDA build is installed there and validated later on a GPU instance. On a GPU instance, the script also performs a real CUDA operation.
 
-Рекомендуемый фрагмент `~/.bashrc`:
+Recommended `~/.bashrc` settings:
 
 ```bash
 export CP_4DA_ENV="$HOME/.conda/envs/4danyone"
@@ -72,26 +72,26 @@ source /opt/conda/etc/profile.d/conda.sh
 conda activate "$CP_4DA_ENV"
 ```
 
-## Загрузка моделей
+## Model download
 
-Сначала положите лицензированный архив SMPL-X в:
+First, place the licensed SMPL-X archive at:
 
 ```text
 s3://${CP_4DA_BUCKET}/models/smplx/models_smplx_v1_1.zip
 ```
 
-Затем выполните:
+Then run:
 
 ```bash
 cd "$HOME/work/4da_3dgs_pipeline"
 ./scripts/download_4danyone_models.sh
 ```
 
-Эта стадия тоже CPU-safe. Скрипт синхронизирует уже имеющиеся файлы из S3, устанавливает SMPL-X и скачивает недостающие 4DAnyone/GVHMR/VGG-19/BiRefNet assets.
+This stage is CPU-safe as well. The script synchronizes existing files from S3, installs SMPL-X, and downloads any missing 4DAnyone, GVHMR, VGG-19, and BiRefNet assets.
 
-## Блокирующий запуск
+## Blocking run
 
-Это первый режим для проверки конфигурации: терминал занят до завершения.
+Use this mode first to validate the configuration. The terminal remains attached until the run completes.
 
 ```bash
 fourda-pipeline \
@@ -106,15 +106,15 @@ fourda-pipeline \
   --frame-indices 60
 ```
 
-Если задан `CP_4DA_BUCKET`, результат автоматически попадёт в:
+When `CP_4DA_BUCKET` is set, the result is automatically uploaded to:
 
 ```text
 s3://${CP_4DA_BUCKET}/runs/leon_video_72views_01/
 ```
 
-Отключить загрузку можно флагом `--no-s3-upload`; задать другой путь — `--s3-output-uri`.
+Use `--no-s3-upload` to disable the upload or `--s3-output-uri` to provide another destination.
 
-Результат выбранного момента:
+The exported moment is written to:
 
 ```text
 ~/4danyone-data/runs/leon_video_72views_01/nerfstudio/frame_060/
@@ -124,9 +124,9 @@ s3://${CP_4DA_BUCKET}/runs/leon_video_72views_01/
 └── masks/
 ```
 
-Флаг `--resume` переиспользует успешно созданные промежуточные результаты. Без него существующий каталог защищён от случайной перезаписи.
+`--resume` reuses successfully completed intermediate outputs. Without it, an existing output directory is protected against accidental overwrite.
 
-## Фоновый запуск и статус
+## Background run and status
 
 ```bash
 fourda-job start \
@@ -142,7 +142,7 @@ fourda-job start \
   --shutdown-on success
 ```
 
-После `start` можно закрыть терминал, VS Code и вкладку браузера. Отдельный worker продолжает работать внутри JupyterLab App.
+After `start`, the terminal, VS Code, and browser tab may be closed. A detached worker continues to run inside the JupyterLab App.
 
 ```bash
 fourda-job status leon_video_72views_01
@@ -152,31 +152,31 @@ fourda-job logs leon_video_72views_01 --follow
 fourda-job stop leon_video_72views_01
 ```
 
-Процент основан на нативных стадиях 4DAnyone и отражает этап выполнения, а не точную оценку оставшегося времени. Статус атомарно сохраняется в `~/4danyone-data/jobs/<job-id>/status.json`.
+Progress is derived from native 4DAnyone stages. It indicates the current stage rather than an exact estimate of remaining time. Status is written atomically to `~/4danyone-data/jobs/<job-id>/status.json`.
 
-### Важное ограничение фонового режима
+### Background execution limitation
 
-Worker живёт **внутри SageMaker JupyterLab App**. Если App будет остановлен вручную или политикой Idle Shutdown до завершения, процесс прекратится. Для долгого прогона задайте Idle Shutdown с запасом либо используйте `--shutdown-on success`: тогда App остановит себя сразу после результата, S3 upload и email.
+The worker runs **inside the SageMaker JupyterLab App**. If the App is stopped manually or by Idle Shutdown before completion, the process terminates. For a long run, configure an idle timeout with sufficient margin or use `--shutdown-on success`; the App will then stop itself immediately after the result, S3 upload, and email notification are complete.
 
-Политики остановки:
+Shutdown policies:
 
-- `never` — App не останавливается автоматически;
-- `success` — остановить только после успешного прогона;
-- `always` — остановить и после успеха, и после ошибки.
+- `never` — never stop the App automatically;
+- `success` — stop only after a successful run;
+- `always` — stop after either success or failure.
 
-Остановка реализована через SageMaker `DeleteApp`. Она прекращает GPU compute, но не удаляет Space и его постоянный EBS-том.
+Shutdown uses SageMaker `DeleteApp`. It stops GPU compute without deleting the Space or its persistent EBS volume.
 
-## Email через Amazon SNS
+## Amazon SNS email notifications
 
-Execution Role должна иметь `sns:CreateTopic`, `sns:Subscribe` и `sns:Publish`. Команду настройки можно выполнить в Space после выдачи этих прав:
+The execution role must allow `sns:CreateTopic`, `sns:Subscribe`, and `sns:Publish`. After granting those permissions, configure email from inside the Space:
 
 ```bash
 fourda-job configure-email --email you@example.com
 ```
 
-AWS отправит письмо `Subscription Confirmation`; откройте его и подтвердите подписку. Конфигурация сохраняется в `~/.config/4da-3dgs-pipeline/aws.json`. После этого фоновые задания отправляют письмо об успехе или ошибке перед автоматической остановкой App.
+AWS sends a `Subscription Confirmation` email. Confirm it before relying on notifications. Configuration is stored in `~/.config/4da-3dgs-pipeline/aws.json`. Background jobs then send an email after success or failure and before any automatic App shutdown.
 
-Для `--shutdown-on` также нужны `sagemaker:DeleteApp` и переменные:
+`--shutdown-on` also requires `sagemaker:DeleteApp` and the following environment variables:
 
 ```bash
 export CP_SM_DOMAIN_ID="d-..."
@@ -185,9 +185,9 @@ export CP_SM_JUPYTER_APP_NAME="default"
 export CP_AWS_REGION="us-east-1"
 ```
 
-## Тесты
+## Tests
 
-Тесты не запускают модели и не требуют GPU:
+The tests do not run model inference and do not require a GPU:
 
 ```bash
 python -m pip install -e '.[dev]'

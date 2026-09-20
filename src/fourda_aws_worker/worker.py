@@ -12,7 +12,13 @@ from fourda_pipeline.config import FourDAnyoneConfig
 from fourda_pipeline.pipeline import FourDAnyonePipeline
 from fourda_pipeline.progress import ProgressUpdate
 
-from .aws import publish_completion, stop_sagemaker_app, upload_directory, upload_input_video
+from .aws import (
+    publish_completion,
+    run_health_check,
+    stop_sagemaker_app,
+    upload_directory,
+    upload_input_video,
+)
 from .config import AwsWorkerConfig
 from .status import JobStatus, utc_now
 
@@ -78,6 +84,22 @@ def run_worker(job_dir: Path) -> int:
     result_s3_uri: str | None = None
     exit_code = 0
     try:
+        status.update(
+            state="running",
+            stage="aws-health-check",
+            progress=0.0,
+            message="Validating AWS identity, S3, SNS email, and SageMaker App",
+        )
+        status.write(status_path)
+        health = run_health_check(aws_worker_config, status.job_id)
+        print(
+            "AWS health check passed: "
+            f"caller={health.caller_arn}, bucket={health.bucket}, "
+            f"topic={health.topic_arn}",
+            flush=True,
+        )
+        print("SNS pipeline-start notification sent", flush=True)
+
         if aws_worker_config.upload_input:
             status.update(
                 state="running",

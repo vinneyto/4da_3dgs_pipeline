@@ -57,6 +57,16 @@ def experiment_s3_uri(config: AwsConfig, experiment_name: str) -> str:
     return f"s3://{config.bucket}/{key}/"
 
 
+def upload_input_video(config: AwsConfig, video_path: Path) -> str:
+    key = "/".join(part for part in (config.input_prefix, video_path.name) if part)
+    _boto3().client("s3", region_name=config.region).upload_file(
+        str(video_path),
+        config.bucket,
+        key,
+    )
+    return f"s3://{config.bucket}/{key}"
+
+
 def upload_directory(config: AwsConfig, source: Path, experiment_name: str) -> str:
     client = _boto3().client("s3", region_name=config.region)
     prefix = "/".join(part for part in (config.runs_prefix, experiment_name) if part)

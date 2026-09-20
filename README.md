@@ -10,7 +10,7 @@ The repository deliberately separates the local pipeline from AWS orchestration.
 |---|---|---|
 | `FourDAnyonePipeline` | 4DAnyone inference and local Nerfstudio/3DGS export | None |
 | `fourda-pipeline` | Blocking local CLI around `FourDAnyonePipeline` | None |
-| `fourda-job` | Detached execution, durable status, S3 upload, SNS email, SageMaker App shutdown | Optional `[aws]` extra |
+| `fourda-job` | Detached execution, durable status, S3 input/result upload, SNS email, SageMaker App shutdown | Optional `[aws]` extra |
 
 `fourda-pipeline` never imports `boto3`, reads environment variables, uploads files, or calls an AWS API. The same core can run on a workstation, another cloud provider, or inside a future managed SageMaker Job.
 
@@ -29,7 +29,7 @@ Edit `config/run.json` before running anything. It has four sections:
 - `environment`: installation paths and pinned dependency versions used by setup scripts;
 - `pipeline`: local input, output, model, camera, and export parameters;
 - `job`: background job identity, status directory, and shutdown policy;
-- `aws`: region, bucket, S3 prefixes, SNS, and SageMaker App identity.
+- `aws`: region, bucket, S3 prefixes, upload switches, SNS, and SageMaker App identity.
 
 The local CLI only requires `schema_version` and `pipeline`. The other sections may be omitted for a completely local run.
 
@@ -144,11 +144,12 @@ fourda-job stop --config config/run.json
 
 The job layer:
 
-1. starts the AWS-independent core pipeline;
-2. records stage-based progress in `<job.jobs_dir>/<job.job_id>/status.json`;
-3. uploads the completed experiment to `s3://<bucket>/<runs_prefix>/<experiment_name>/` when `aws.upload_results` is `true`;
-4. sends an SNS success or failure email;
-5. applies `job.shutdown_on` and optionally stops the SageMaker JupyterLab App.
+1. uploads the local input video to `s3://<bucket>/<input_prefix>/<filename>` when `aws.upload_input` is `true`;
+2. starts the AWS-independent core pipeline with the local `pipeline.video_path`;
+3. records stage-based progress in `<job.jobs_dir>/<job.job_id>/status.json`;
+4. uploads the completed experiment to `s3://<bucket>/<runs_prefix>/<experiment_name>/` when `aws.upload_results` is `true`;
+5. sends an SNS success or failure email;
+6. applies `job.shutdown_on` and optionally stops the SageMaker JupyterLab App.
 
 Progress reflects native 4DAnyone stages, not an exact remaining-time estimate.
 

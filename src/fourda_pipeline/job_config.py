@@ -37,8 +37,10 @@ class SageMakerAppConfig:
 class AwsConfig:
     region: str
     bucket: str
+    input_prefix: str
     runs_prefix: str
     models_prefix: str
+    upload_input: bool
     upload_results: bool
     sns: SnsConfig
     sagemaker: SageMakerAppConfig
@@ -48,8 +50,10 @@ class AwsConfig:
         return cls(
             region=str(payload["region"]),
             bucket=str(payload["bucket"]),
+            input_prefix=str(payload.get("input_prefix", "input")).strip("/"),
             runs_prefix=str(payload.get("runs_prefix", "runs")).strip("/"),
             models_prefix=str(payload.get("models_prefix", "models")).strip("/"),
+            upload_input=bool(payload.get("upload_input", True)),
             upload_results=bool(payload.get("upload_results", True)),
             sns=SnsConfig(**payload["sns"]),
             sagemaker=SageMakerAppConfig(**payload["sagemaker"]),

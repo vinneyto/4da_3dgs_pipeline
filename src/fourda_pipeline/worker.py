@@ -8,7 +8,12 @@ import os
 import traceback
 from pathlib import Path
 
-from .aws_integration import publish_completion, stop_sagemaker_app, upload_directory
+from .aws_integration import (
+    publish_completion,
+    stop_sagemaker_app,
+    upload_directory,
+    upload_input_video,
+)
 from .config import FourDAnyoneConfig
 from .job_config import AwsConfig
 from .pipeline import FourDAnyonePipeline
@@ -20,6 +25,7 @@ def _notification_text(
     status: JobStatus,
     request: dict,
     result: dict | None,
+    input_s3_uri: str | None,
     s3_uri: str | None,
 ) -> str:
     lines = [
@@ -31,6 +37,7 @@ def _notification_text(
         lines.extend(
             [
                 f"Experiment: {result['experiment_name']}",
+                f"S3 input: {input_s3_uri or 'upload disabled'}",
                 f"Local result: {result['experiment_dir']}",
                 f"S3 result: {s3_uri or 'upload disabled'}",
                 f"Elapsed seconds: {result['elapsed_seconds']:.1f}",
@@ -59,8 +66,9 @@ def run_worker(job_dir: Path) -> int:
     status.write(status_path)
 
     def on_progress(update: ProgressUpdate) -> None:
-        # The local pipeline owns 0%-95%; AWS result upload owns 95%-100%.
-        fraction = update.fraction * 0.95
+        # Input upload owns 0%-5%, the local core owns 5%-95%, and result
+        # upload owns 95%-100%.
+        fraction = 0.05 + update.fraction * 0.90
         status.update(
             state="running",
             stage=update.stage,
@@ -71,9 +79,20 @@ def run_worker(job_dir: Path) -> int:
         print(f"[{fraction * 100:6.2f}%] {update.stage}: {update.message}", flush=True)
 
     result: dict | None = None
+    input_s3_uri: str | None = None
     s3_uri: str | None = None
     exit_code = 0
     try:
+        if aws_config.upload_input:
+            status.update(
+                state="running",
+                stage="input-upload",
+                progress=0.01,
+                message=f"Uploading input video to s3://{aws_config.bucket}",
+            )
+            status.write(status_path)
+            input_s3_uri = upload_input_video(aws_config, pipeline_config.video_path)
+            print(f"Uploaded input video to {input_s3_uri}", flush=True)
         result = FourDAnyonePipeline(pipeline_config, on_progress=on_progress).run()
         if aws_config.upload_results:
             status.update(
@@ -114,7 +133,7 @@ def run_worker(job_dir: Path) -> int:
         publish_completion(
             aws_config,
             f"4DAnyone {status.state}: {status.job_id}",
-            _notification_text(status, request, result, s3_uri),
+            _notification_text(status, request, result, input_s3_uri, s3_uri),
         )
         print("SNS completion notification sent", flush=True)
     except Exception:

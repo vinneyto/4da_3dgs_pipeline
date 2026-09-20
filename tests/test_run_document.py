@@ -23,8 +23,10 @@ def document(tmp_path: Path) -> dict:
         "aws": {
             "region": "us-east-1",
             "bucket": "cp-4da-test",
+            "input_prefix": "input",
             "models_prefix": "models",
             "runs_prefix": "runs",
+            "upload_input": True,
             "upload_results": True,
             "sns": {"topic_name": "cp-4da-test", "email": "user@example.com"},
             "sagemaker": {"domain_id": "d-test", "space_name": "space", "app_name": "default"},
@@ -52,4 +54,5 @@ def test_job_reads_aws_boundary_from_same_document(tmp_path: Path) -> None:
     assert pipeline.experiment_name == "leo"
     assert job.jobs_dir == tmp_path / "jobs"
     assert job.aws.bucket == "cp-4da-test"
+    assert job.aws.upload_input is True
     assert job.shutdown_on == "success"

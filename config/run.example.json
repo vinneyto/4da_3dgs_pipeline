@@ -39,8 +39,10 @@
   "aws": {
     "region": "us-east-1",
     "bucket": "cp-4da-REPLACE_WITH_DEPLOYMENT_ID",
+    "input_prefix": "input",
     "models_prefix": "models",
     "runs_prefix": "runs",
+    "upload_input": true,
     "upload_results": true,
     "sns": {
       "topic_name": "cp-4da-pipeline-REPLACE_WITH_DEPLOYMENT_ID",

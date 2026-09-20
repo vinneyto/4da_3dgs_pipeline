@@ -5,7 +5,12 @@ from pathlib import Path
 import pytest
 
 from fourda_aws_worker import aws
-from fourda_aws_worker.config import AwsWorkerConfig, SageMakerAppConfig, SnsConfig
+from fourda_aws_worker.config import (
+    AwsWorkerConfig,
+    LocalWorkspaceConfig,
+    SageMakerAppConfig,
+    SnsConfig,
+)
 
 
 class FakeClient:
@@ -22,6 +27,14 @@ class FakeClient:
 
     def head_bucket(self, **kwargs):
         self._record("head_bucket", kwargs)
+
+    def head_object(self, **kwargs):
+        self._record("head_object", kwargs)
+        return {"ContentLength": 100}
+
+    def list_objects_v2(self, **kwargs):
+        self._record("list_objects_v2", kwargs)
+        return {"KeyCount": 1}
 
     def put_object(self, **kwargs):
         self._record("put_object", kwargs)
@@ -64,18 +77,48 @@ class FakeBoto3:
         return self.clients[name]
 
 
+class FakePaginator:
+    def paginate(self, **_kwargs):
+        return [
+            {
+                "Contents": [
+                    {"Key": "models/checkpoint.bin", "Size": 4},
+                    {"Key": "models/", "Size": 0},
+                ]
+            }
+        ]
+
+
+class FakeDownloadS3(FakeClient):
+    def head_object(self, **kwargs):
+        self._record("head_object", kwargs)
+        return {"ContentLength": 5}
+
+    def download_file(self, bucket, key, filename):
+        self._record("download_file", {"Bucket": bucket, "Key": key, "Filename": filename})
+        Path(filename).write_bytes(b"video" if key.endswith(".MOV") else b"data")
+
+    def get_paginator(self, name):
+        assert name == "list_objects_v2"
+        return FakePaginator()
+
+
 def make_config(tmp_path: Path, *, shutdown_on: str = "success") -> AwsWorkerConfig:
     return AwsWorkerConfig(
         job_id="job-01",
-        jobs_dir=tmp_path,
         shutdown_on=shutdown_on,
         region="us-east-1",
         bucket="fourda-test",
+        s3_video_path="s3://fourda-test/input/leo.MOV",
         input_prefix="input",
         runs_prefix="runs",
         models_prefix="models",
-        upload_input=True,
+        sync_models=True,
         upload_results=True,
+        local=LocalWorkspaceConfig(
+            data_root=tmp_path / "data",
+            fourdanyone_root=tmp_path / "4DAnyone",
+        ),
         sns=SnsConfig(topic_name="fourda", email="owner@example.com"),
         sagemaker=SageMakerAppConfig(
             domain_id="d-test", space_name="space-test", app_name="default"
@@ -90,10 +133,14 @@ def test_health_check_validates_aws_and_sends_start_notification(monkeypatch, tm
     result = aws.run_health_check(make_config(tmp_path), "job-01")
 
     assert result.account == "123456789012"
-    assert result.writable_prefixes == ("input", "runs")
+    assert result.writable_prefixes == ("runs",)
     assert result.sagemaker_app_status == "InService"
+    assert result.video_s3_uri == "s3://fourda-test/input/leo.MOV"
     s3_calls = fake.clients["s3"].calls
-    assert [name for name, _ in s3_calls].count("put_object") == 2
+    assert [name for name, _ in s3_calls].count("put_object") == 1
+    assert [call for call in fake.clients["sns"].calls if call[0] == "publish"] == []
+
+    aws.publish_started(make_config(tmp_path), result, "leo-one-layer")
     publish = [call for call in fake.clients["sns"].calls if call[0] == "publish"]
     assert len(publish) == 1
     assert publish[0][1]["Subject"] == "4DAnyone AWS job started: job-01"
@@ -117,3 +164,29 @@ def test_health_check_skips_sagemaker_when_shutdown_is_disabled(monkeypatch, tmp
 
     assert result.sagemaker_app_status is None
     assert fake.clients["sagemaker"].calls == []
+
+
+def test_worker_downloads_video_and_reuses_matching_local_copy(monkeypatch, tmp_path) -> None:
+    fake = FakeBoto3()
+    fake.clients["s3"] = FakeDownloadS3("s3")
+    monkeypatch.setattr(aws, "_boto3", lambda: fake)
+    config = make_config(tmp_path)
+
+    first = aws.download_input_video(config)
+    second = aws.download_input_video(config)
+
+    assert first == second == tmp_path / "data/input/leo.MOV"
+    downloads = [call for call in fake.clients["s3"].calls if call[0] == "download_file"]
+    assert len(downloads) == 1
+
+
+def test_worker_syncs_changed_model_objects(monkeypatch, tmp_path) -> None:
+    fake = FakeBoto3()
+    fake.clients["s3"] = FakeDownloadS3("s3")
+    monkeypatch.setattr(aws, "_boto3", lambda: fake)
+    config = make_config(tmp_path)
+
+    found, downloaded = aws.sync_model_objects(config)
+
+    assert (found, downloaded) == (1, 1)
+    assert (tmp_path / "data/models/checkpoint.bin").read_bytes() == b"data"

@@ -10,7 +10,7 @@ The repository deliberately separates the local pipeline from AWS orchestration.
 |---|---|---|
 | `FourDAnyonePipeline` | 4DAnyone inference and local Nerfstudio/3DGS export | None |
 | `fourda-pipeline` | Blocking local CLI around `FourDAnyonePipeline` | None |
-| `fourda-aws-worker` | AWS-specific detached execution, durable job status, S3 input/result upload, SNS email, SageMaker App shutdown | Optional `[aws]` extra |
+| `fourda-aws-worker` | AWS-specific detached execution, durable job status, S3 staging/result upload, SNS email, SageMaker App shutdown | Optional `[aws]` extra |
 
 `fourda-pipeline` never imports `boto3`, reads environment variables, uploads files, or calls an AWS API. The same core can run on a workstation, another cloud provider, or inside a future managed SageMaker Job.
 
@@ -34,10 +34,18 @@ cp config/run.example.json config/run.json
 Edit `config/run.json` before running anything. It has four sections:
 
 - `environment`: installation paths and pinned dependency versions used by setup scripts;
-- `pipeline`: local input, output, model, camera, and export parameters;
-- `aws_worker`: background job identity, status directory, shutdown policy, region, bucket, S3 prefixes, upload switches, SNS, and SageMaker App identity.
+- `pipeline`: cloud-independent camera, inference, and export parameters;
+- `aws_worker`: S3 input, local persistent roots, background job identity, shutdown policy, output upload, SNS, and SageMaker App identity.
 
-The local CLI only requires `schema_version` and `pipeline`. The other sections may be omitted for a completely local run.
+For an AWS run, `pipeline` deliberately contains no filesystem paths. The worker derives
+`video_path`, `model_dir`, `runs_dir`, and `fourdanyone_root` from `aws_worker.s3_video_path`
+and `aws_worker.local`, downloads the required S3 data, and constructs the complete
+`FourDAnyoneConfig` immediately before execution.
+
+The AWS example is not directly accepted by `fourda-pipeline`, because that blocking,
+cloud-independent CLI does not download S3 inputs. A completely local run document may
+omit `environment` and `aws_worker`, but its `pipeline` object must explicitly provide
+`video_path`, `fourdanyone_root`, `model_dir`, and `runs_dir`.
 
 All filesystem paths must be absolute. This makes a run document self-contained and prevents hidden differences between shells, `.bashrc` files, notebooks, and background workers.
 
@@ -46,8 +54,8 @@ The checked-in [`config/run.example.json`](config/run.example.json) reproduces t
 | Parameter | Value |
 |---|---:|
 | `views_per_layer` | 24 |
-| `layer_pitches` | `[-15, 0, 15]` |
-| Total cameras | 72 |
+| `layer_pitches` | `[0]` |
+| Total cameras | 24 |
 | `start_yaw` | 0° |
 | `yaw_span` | 360° |
 | `target_fps` | 30 |
@@ -112,13 +120,20 @@ Then run:
 
 This CPU-safe script reads the conda, repository, model, region, bucket, and prefix values from JSON. It synchronizes existing model assets from S3, installs SMPL-X, downloads missing upstream assets, and validates the final model set.
 
+This remains the one-time model installation step. At job startup the worker also syncs
+objects under `aws_worker.models_prefix`, but it reuses matching files on the persistent
+EBS volume and does not reinstall Python dependencies or recreate external checkpoints.
+
 ## Blocking local run
 
 ```bash
-fourda-pipeline --config config/run.json
+cp config/local-run.example.json config/local-run.json
+# Edit all absolute paths.
+fourda-pipeline --config config/local-run.json
 ```
 
-This command performs no AWS operations. It writes the selected synchronized moment to:
+`config/local-run.json` must contain the complete local paths described above. This command
+performs no AWS operations. It writes the selected synchronized moment to:
 
 ```text
 <pipeline.runs_dir>/<pipeline.experiment_name>/nerfstudio/frame_060/
@@ -151,21 +166,21 @@ fourda-aws-worker stop --config config/run.json
 The job layer:
 
 1. runs a fail-closed AWS health check before expensive GPU work;
-2. sends an SNS `job started` email only after the health check passes;
-3. uploads the local input video to `s3://<bucket>/<input_prefix>/<filename>` when `aws_worker.upload_input` is `true`;
-4. starts the AWS-independent core pipeline with the local `pipeline.video_path`;
-5. records stage-based progress in `<aws_worker.jobs_dir>/<aws_worker.job_id>/status.json`;
-6. uploads the completed experiment to `s3://<bucket>/<runs_prefix>/<experiment_name>/` when `aws_worker.upload_results` is `true`;
-7. sends an SNS success or failure email;
-8. applies `aws_worker.shutdown_on` and optionally stops the SageMaker JupyterLab App.
+2. downloads `aws_worker.s3_video_path` into `<data_root>/input/`, reusing a matching local file;
+3. synchronizes S3 model objects into `<data_root>/models/`, reusing the persistent cache;
+4. derives the full local pipeline configuration and validates its paths;
+5. sends an SNS `job started` email only after staging succeeds;
+6. starts the AWS-independent core pipeline;
+7. records stage-based progress in `<data_root>/jobs/<job_id>/status.json`;
+8. uploads the completed experiment to `s3://<bucket>/<runs_prefix>/<experiment_name>/` when `aws_worker.upload_results` is `true`;
+9. sends an SNS success or failure email;
+10. applies `aws_worker.shutdown_on` and optionally stops the SageMaker JupyterLab App.
 
-The startup health check validates the current STS identity, bucket access, `PutObject`
-for every enabled input/output prefix, a confirmed SNS subscription for the configured
-email address, and the configured SageMaker App when automatic shutdown is enabled.
-If any mandatory check or the startup SNS publish fails, the pipeline does not start and
-the durable job status becomes `failed`. Small S3 probe objects are deleted when the role
-also has `s3:DeleteObject`; otherwise they remain under `.worker-health/` and are reused by
-subsequent runs.
+The startup health check validates the current STS identity, bucket access, the exact S3
+video object, model-prefix listing, result-prefix `PutObject`, a confirmed SNS subscription
+for the configured email address, and the configured SageMaker App when automatic shutdown
+is enabled. If any mandatory check, staging operation, path validation, or startup SNS
+publish fails, inference does not start and the durable job status becomes `failed`.
 
 Progress reflects native 4DAnyone stages, not an exact remaining-time estimate.
 
@@ -184,8 +199,8 @@ Shutdown uses SageMaker `DeleteApp`. It stops compute without deleting the Space
 ## Amazon SNS email
 
 The execution role must allow `sns:CreateTopic`, `sns:Subscribe`, `sns:Publish`, and
-`sns:ListSubscriptionsByTopic`. Configure `aws_worker.sns.topic_name` and
-`aws_worker.sns.email`, then run:
+`sns:ListSubscriptionsByTopic`. Configure `aws_worker.sns_topic_name` and
+`aws_worker.notification_email`, then run:
 
 ```bash
 fourda-aws-worker configure-email --config config/run.json
@@ -195,7 +210,8 @@ Confirm the AWS `Subscription Confirmation` email before starting a job. The wor
 to start the pipeline while the configured subscription is missing or pending. No second
 AWS configuration file is created; the run JSON remains the single source of truth.
 
-Automatic shutdown additionally requires `sagemaker:DeleteApp`. Domain ID, Space name, and App name are read from `aws_worker.sagemaker` in the same JSON document.
+Automatic shutdown additionally requires `sagemaker:DeleteApp`. Domain ID, Space name,
+and App name are read from the `aws_worker.sagemaker_*` fields in the same JSON document.
 
 ## Tests
 

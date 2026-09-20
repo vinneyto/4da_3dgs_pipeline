@@ -8,18 +8,19 @@ import os
 import traceback
 from pathlib import Path
 
-from fourda_pipeline.config import FourDAnyoneConfig
 from fourda_pipeline.pipeline import FourDAnyonePipeline
 from fourda_pipeline.progress import ProgressUpdate
 
 from .aws import (
+    download_input_video,
     publish_completion,
+    publish_started,
     run_health_check,
     stop_sagemaker_app,
+    sync_model_objects,
     upload_directory,
-    upload_input_video,
 )
-from .config import AwsWorkerConfig
+from .config import AwsWorkerConfig, materialize_pipeline_config
 from .status import JobStatus, utc_now
 
 
@@ -39,7 +40,7 @@ def _notification_text(
         lines.extend(
             [
                 f"Experiment: {result['experiment_name']}",
-                f"S3 input: {input_s3_uri or 'upload disabled'}",
+                f"S3 input: {input_s3_uri}",
                 f"Local result: {result['experiment_dir']}",
                 f"S3 result: {result_s3_uri or 'upload disabled'}",
                 f"Elapsed seconds: {result['elapsed_seconds']:.1f}",
@@ -53,8 +54,8 @@ def _notification_text(
 
 def run_worker(job_dir: Path) -> int:
     request = json.loads((job_dir / "request.json").read_text())
-    pipeline_config = FourDAnyoneConfig.from_dict(request["pipeline"])
     aws_worker_config = AwsWorkerConfig.from_dict(request["aws_worker"])
+    pipeline_config = materialize_pipeline_config(request["pipeline"], aws_worker_config)
     status_path = job_dir / "status.json"
     status = JobStatus.read(status_path)
     status.update(
@@ -67,9 +68,9 @@ def run_worker(job_dir: Path) -> int:
     status.write(status_path)
 
     def on_progress(update: ProgressUpdate) -> None:
-        # Input upload owns 0%-5%, the local core owns 5%-95%, and result
-        # upload owns 95%-100%.
-        fraction = 0.05 + update.fraction * 0.90
+        # AWS validation/staging owns 0%-10%, the local core owns 10%-95%,
+        # and result upload owns 95%-100%.
+        fraction = 0.10 + update.fraction * 0.85
         status.update(
             state="running",
             stage=update.stage,
@@ -80,7 +81,7 @@ def run_worker(job_dir: Path) -> int:
         print(f"[{fraction * 100:6.2f}%] {update.stage}: {update.message}", flush=True)
 
     result: dict | None = None
-    input_s3_uri: str | None = None
+    input_s3_uri: str | None = aws_worker_config.video_s3_uri
     result_s3_uri: str | None = None
     exit_code = 0
     try:
@@ -98,18 +99,35 @@ def run_worker(job_dir: Path) -> int:
             f"topic={health.topic_arn}",
             flush=True,
         )
-        print("SNS pipeline-start notification sent", flush=True)
+        status.update(
+            state="running",
+            stage="input-download",
+            progress=0.02,
+            message=f"Downloading input video from {aws_worker_config.video_s3_uri}",
+        )
+        status.write(status_path)
+        video_path = download_input_video(aws_worker_config)
+        print(f"Input video ready at {video_path}", flush=True)
 
-        if aws_worker_config.upload_input:
-            status.update(
-                state="running",
-                stage="input-upload",
-                progress=0.01,
-                message=f"Uploading input video to s3://{aws_worker_config.bucket}",
-            )
-            status.write(status_path)
-            input_s3_uri = upload_input_video(aws_worker_config, pipeline_config.video_path)
-            print(f"Uploaded input video to {input_s3_uri}", flush=True)
+        status.update(
+            state="running",
+            stage="model-sync",
+            progress=0.06,
+            message=(
+                "Synchronizing models from "
+                f"s3://{aws_worker_config.bucket}/{aws_worker_config.models_prefix}/"
+            ),
+        )
+        status.write(status_path)
+        model_count, downloaded_count = sync_model_objects(aws_worker_config)
+        print(
+            f"Model cache ready: {model_count} S3 objects, {downloaded_count} downloaded",
+            flush=True,
+        )
+
+        pipeline_config.validate_paths()
+        publish_started(aws_worker_config, health, pipeline_config.experiment_name)
+        print("SNS pipeline-start notification sent", flush=True)
 
         result = FourDAnyonePipeline(pipeline_config, on_progress=on_progress).run()
 

@@ -16,7 +16,7 @@ get() { /usr/bin/python3 "$READ_CONFIG" "$CONFIG_PATH" "$1"; }
 CONDA_BOOTSTRAP="$(get environment.conda_bootstrap)"
 CONDA_ENV="$(get environment.conda_env)"
 PIPELINE_REPO_ROOT="$(get environment.pipeline_repo_root)"
-FOURDANYONE_ROOT="$(get pipeline.fourdanyone_root)"
+FOURDANYONE_ROOT="$(get aws_worker.local.fourdanyone_root)"
 FOURDANYONE_GIT_URL="$(get environment.fourdanyone_git_url)"
 FOURDANYONE_GIT_REF="$(get environment.fourdanyone_git_ref)"
 PYTHON_VERSION="$(get environment.python_version)"

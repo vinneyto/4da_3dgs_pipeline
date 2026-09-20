@@ -15,8 +15,9 @@ get() { /usr/bin/python3 "$READ_CONFIG" "$CONFIG_PATH" "$1"; }
 
 CONDA_BOOTSTRAP="$(get environment.conda_bootstrap)"
 CONDA_ENV="$(get environment.conda_env)"
-FOURDANYONE_ROOT="$(get pipeline.fourdanyone_root)"
-MODEL_DIR="$(get pipeline.model_dir)"
+FOURDANYONE_ROOT="$(get aws_worker.local.fourdanyone_root)"
+DATA_ROOT="$(get aws_worker.local.data_root)"
+MODEL_DIR="$DATA_ROOT/models"
 AWS_REGION="$(get aws_worker.region)"
 S3_BUCKET="$(get aws_worker.bucket)"
 MODELS_PREFIX="$(get aws_worker.models_prefix)"

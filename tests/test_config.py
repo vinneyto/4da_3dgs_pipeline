@@ -23,7 +23,7 @@ def test_colab_defaults_produce_72_cameras(tmp_path: Path) -> None:
     assert config.views_per_layer == 24
     assert config.layer_pitches == (-15, 0, 15)
     assert config.num_views == 72
-    assert config.nerfstudio.frame_indices == (60,)
+    assert config.nerfstudio.frames == (60,)
     assert config.enable_turbo is True
 
 
@@ -43,7 +43,7 @@ def test_config_round_trip(tmp_path: Path) -> None:
         experiment_name="round-trip",
         layer_pitches=(-15, 15),
         views_per_layer=6,
-        nerfstudio=NerfstudioArtifactConfig(frame_indices=(30, 60)),
+        nerfstudio=NerfstudioArtifactConfig(frames=(30, 60)),
     )
     restored = FourDAnyoneConfig.from_dict(original.to_dict())
     assert restored == original
@@ -153,7 +153,7 @@ def test_nerfstudio_artifact_can_run_without_dataset_stage() -> None:
                 "nerfstudio": {
                     "enabled": True,
                     "source_experiment_name": "leo-original",
-                    "frame_indices": [30, 60, 90],
+                    "frames": [30, 60, 90],
                     "device": "cpu",
                     "replace_existing": True,
                 },
@@ -165,7 +165,7 @@ def test_nerfstudio_artifact_can_run_without_dataset_stage() -> None:
 
     assert payload["dataset_enabled"] is False
     assert payload["nerfstudio"]["source_experiment_name"] == "leo-original"
-    assert payload["nerfstudio"]["frame_indices"] == [30, 60, 90]
+    assert payload["nerfstudio"]["frames"] == [30, 60, 90]
 
 
 def test_reconstruction_artifact_is_not_silently_ignored() -> None:

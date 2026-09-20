@@ -66,6 +66,12 @@ The checked-in [`config/run.example.json`](config/run.example.json) reproduces t
 | Model | turbo |
 | Nerfstudio artifact frames | `[60]` |
 
+`artifacts.dataset.nerfstudio.frames` is always an array. It defaults to the
+single synchronized frame `[60]`, but already supports batch export such as
+`[30, 60, 90]`. The future 3DGS reconstruction stage will consume these
+per-frame datasets as a batch instead of introducing a separate singular-frame
+setting.
+
 `RERUN_VIEW_COUNT=4` from the Colab notebook belongs to downstream visualization. It is not a 4DAnyone inference or export parameter.
 
 ## Persistent SageMaker Space layout
@@ -166,7 +172,7 @@ fourda-worker-config \
   --s3-video-path s3://cp-4da-d9f856354df8/input/leo.MOV \
   --views-per-layer 24 \
   --layer-pitches 0 \
-  --nerfstudio-frame-indices 60 \
+  --nerfstudio-frames 60 \
   --telegram-chat-id YOUR_TELEGRAM_CHAT_ID \
   --telegram-bot-token-env CP_4DA_TELEGRAM_BOT_TOKEN \
   --sagemaker-domain-id d-x1ij0jwvo44o \
@@ -196,7 +202,7 @@ fourda-worker-config \
   --no-dataset \
   --nerfstudio \
   --nerfstudio-source-experiment-name leo_three_layers_72views_01 \
-  --nerfstudio-frame-indices 30 60 90 \
+  --nerfstudio-frames 30 60 90 \
   --nerfstudio-device cpu \
   --bucket cp-4da-d9f856354df8 \
   --video leo.MOV \

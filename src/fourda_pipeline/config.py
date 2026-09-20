@@ -27,9 +27,9 @@ def _migrate_legacy_nerfstudio_artifact(
     if "frame" in values:
         if "frame_indices" in values:
             raise ValueError("pipeline must use either frame or frame_indices, not both")
-        legacy["frame_indices"] = [values.pop("frame")]
+        legacy["frames"] = [values.pop("frame")]
     elif "frame_indices" in values:
-        legacy["frame_indices"] = values.pop("frame_indices")
+        legacy["frames"] = values.pop("frame_indices")
     if "export_device" in values:
         legacy["device"] = values.pop("export_device")
     if payload is not None and legacy:

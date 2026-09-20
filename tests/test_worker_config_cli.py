@@ -46,7 +46,7 @@ def test_generator_writes_a_valid_worker_document(tmp_path: Path) -> None:
     assert raw["artifacts"]["dataset"]["nerfstudio"] == {
         "enabled": True,
         "source_experiment_name": "leo_one_layer_24views_01",
-        "frame_indices": [60],
+        "frames": [60],
         "device": "cuda:0",
         "replace_existing": False,
     }
@@ -68,7 +68,7 @@ def test_generator_writes_a_valid_worker_document(tmp_path: Path) -> None:
     assert pipeline.num_views == 24
     assert pipeline.layer_pitches == (0,)
     assert pipeline.nerfstudio.enabled is True
-    assert pipeline.nerfstudio.frame_indices == (60,)
+    assert pipeline.nerfstudio.frames == (60,)
     assert worker.job_id == pipeline.experiment_name
     assert worker.bucket.name == "cp-4da-test"
     assert raw["aws_worker"]["sagemaker"]["app_name"] == "default"
@@ -202,7 +202,7 @@ def test_generator_supports_nerfstudio_only_run(tmp_path: Path) -> None:
             "--nerfstudio",
             "--nerfstudio-source-experiment-name",
             "leo-original",
-            "--nerfstudio-frame-indices",
+            "--nerfstudio-frames",
             "30",
             "60",
             "90",
@@ -225,7 +225,7 @@ def test_generator_supports_nerfstudio_only_run(tmp_path: Path) -> None:
     artifact = raw["artifacts"]["dataset"]["nerfstudio"]
     assert raw["pipeline"]["dataset"]["enabled"] is False
     assert artifact["source_experiment_name"] == "leo-original"
-    assert artifact["frame_indices"] == [30, 60, 90]
+    assert artifact["frames"] == [30, 60, 90]
     assert artifact["device"] == "cpu"
     assert artifact["replace_existing"] is True
     assert pipeline.dataset_enabled is False

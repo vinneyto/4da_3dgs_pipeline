@@ -86,7 +86,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Export synchronized static datasets from the completed 4DAnyone run",
     )
     nerfstudio.add_argument(
-        "--nerfstudio-frame-indices",
+        "--nerfstudio-frames",
         type=int,
         nargs="+",
         default=[60],
@@ -100,6 +100,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     # Preserve commands generated before schema v6 while keeping the new JSON
     # vocabulary focused on artifacts.
+    nerfstudio.add_argument(
+        "--nerfstudio-frame-indices",
+        dest="nerfstudio_frames",
+        type=int,
+        nargs="+",
+        help=argparse.SUPPRESS,
+    )
     nerfstudio.add_argument("--frame", type=int, help=argparse.SUPPRESS)
     nerfstudio.add_argument("--export-device", help=argparse.SUPPRESS)
     pipeline.add_argument(
@@ -268,10 +275,10 @@ def build_document(args: argparse.Namespace) -> dict[str, Any]:
                         args.nerfstudio_source_experiment_name
                         or args.experiment_name
                     ),
-                    "frame_indices": (
+                    "frames": (
                         [args.frame]
                         if args.frame is not None
-                        else args.nerfstudio_frame_indices
+                        else args.nerfstudio_frames
                     ),
                     "device": args.export_device or args.nerfstudio_device,
                     "replace_existing": args.nerfstudio_replace_existing,

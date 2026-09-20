@@ -117,8 +117,8 @@ class FourDAnyonePipeline:
     def _export_datasets(self) -> list[dict[str, Any]]:
         config = self.config
         results: list[dict[str, Any]] = []
-        count = len(config.nerfstudio.frame_indices)
-        for offset, frame_index in enumerate(config.nerfstudio.frame_indices):
+        count = len(config.nerfstudio.frames)
+        for offset, frame_index in enumerate(config.nerfstudio.frames):
             destination = config.dataset_dir(frame_index)
             transforms = destination / "transforms.json"
             if config.resume and transforms.is_file():

@@ -32,7 +32,7 @@
       "nerfstudio": {
         "enabled": true,
         "source_experiment_name": "leo_one_layer_24views_01",
-        "frame_indices": [60],
+        "frames": [60],
         "device": "cuda:0",
         "replace_existing": false
       },

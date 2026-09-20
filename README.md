@@ -150,12 +150,22 @@ fourda-aws-worker stop --config config/run.json
 
 The job layer:
 
-1. uploads the local input video to `s3://<bucket>/<input_prefix>/<filename>` when `aws_worker.upload_input` is `true`;
-2. starts the AWS-independent core pipeline with the local `pipeline.video_path`;
-3. records stage-based progress in `<aws_worker.jobs_dir>/<aws_worker.job_id>/status.json`;
-4. uploads the completed experiment to `s3://<bucket>/<runs_prefix>/<experiment_name>/` when `aws_worker.upload_results` is `true`;
-5. sends an SNS success or failure email;
-6. applies `aws_worker.shutdown_on` and optionally stops the SageMaker JupyterLab App.
+1. runs a fail-closed AWS health check before expensive GPU work;
+2. sends an SNS `job started` email only after the health check passes;
+3. uploads the local input video to `s3://<bucket>/<input_prefix>/<filename>` when `aws_worker.upload_input` is `true`;
+4. starts the AWS-independent core pipeline with the local `pipeline.video_path`;
+5. records stage-based progress in `<aws_worker.jobs_dir>/<aws_worker.job_id>/status.json`;
+6. uploads the completed experiment to `s3://<bucket>/<runs_prefix>/<experiment_name>/` when `aws_worker.upload_results` is `true`;
+7. sends an SNS success or failure email;
+8. applies `aws_worker.shutdown_on` and optionally stops the SageMaker JupyterLab App.
+
+The startup health check validates the current STS identity, bucket access, `PutObject`
+for every enabled input/output prefix, a confirmed SNS subscription for the configured
+email address, and the configured SageMaker App when automatic shutdown is enabled.
+If any mandatory check or the startup SNS publish fails, the pipeline does not start and
+the durable job status becomes `failed`. Small S3 probe objects are deleted when the role
+also has `s3:DeleteObject`; otherwise they remain under `.worker-health/` and are reused by
+subsequent runs.
 
 Progress reflects native 4DAnyone stages, not an exact remaining-time estimate.
 
@@ -173,13 +183,17 @@ Shutdown uses SageMaker `DeleteApp`. It stops compute without deleting the Space
 
 ## Amazon SNS email
 
-The execution role must allow `sns:CreateTopic`, `sns:Subscribe`, and `sns:Publish`. Configure `aws_worker.sns.topic_name` and `aws_worker.sns.email`, then run:
+The execution role must allow `sns:CreateTopic`, `sns:Subscribe`, `sns:Publish`, and
+`sns:ListSubscriptionsByTopic`. Configure `aws_worker.sns.topic_name` and
+`aws_worker.sns.email`, then run:
 
 ```bash
 fourda-aws-worker configure-email --config config/run.json
 ```
 
-Confirm the AWS `Subscription Confirmation` email before relying on notifications. No second AWS configuration file is created; the run JSON remains the single source of truth.
+Confirm the AWS `Subscription Confirmation` email before starting a job. The worker refuses
+to start the pipeline while the configured subscription is missing or pending. No second
+AWS configuration file is created; the run JSON remains the single source of truth.
 
 Automatic shutdown additionally requires `sagemaker:DeleteApp`. Domain ID, Space name, and App name are read from `aws_worker.sagemaker` in the same JSON document.
 

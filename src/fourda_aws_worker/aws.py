@@ -95,6 +95,13 @@ def _publish_telegram(config: AwsWorkerConfig, subject: str, message: str) -> No
     )
 
 
+def publish_telegram(config: AwsWorkerConfig, subject: str, message: str) -> None:
+    """Publish one Telegram message for runtime monitoring."""
+    if config.telegram is None or not config.telegram.enabled:
+        raise ValueError("Telegram notifications are not enabled")
+    _publish_telegram(config, subject, message)
+
+
 def publish_notification(config: AwsWorkerConfig, subject: str, message: str) -> dict[str, str]:
     """Publish to every enabled channel without making notifications job-critical."""
     outcomes: dict[str, str] = {}

@@ -63,3 +63,23 @@ def test_generator_can_replace_a_document_with_force(tmp_path: Path) -> None:
     pipeline, _ = load_aws_worker_config(output)
     assert pipeline.layer_pitches == (-15, 0, 15)
     assert pipeline.num_views == 72
+
+
+def test_generator_writes_optional_telegram_monitoring(tmp_path: Path) -> None:
+    output = tmp_path / "run.json"
+
+    main(
+        [
+            *arguments(output),
+            "--telegram-chat-id",
+            "123456",
+            "--telegram-stream-logs",
+            "--telegram-resource-status-interval-seconds",
+            "60",
+        ]
+    )
+
+    _, worker = load_aws_worker_config(output)
+    assert worker.telegram is not None
+    assert worker.telegram.stream_logs is True
+    assert worker.telegram.resource_status_interval_seconds == 60

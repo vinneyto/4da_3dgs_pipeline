@@ -37,6 +37,8 @@ class TelegramConfig:
     bot_token: str | None = None
     bot_token_env: str | None = None
     enabled: bool = True
+    stream_logs: bool = False
+    resource_status_interval_seconds: int | None = None
 
     def __post_init__(self) -> None:
         if self.enabled and not self.chat_id:
@@ -44,6 +46,13 @@ class TelegramConfig:
         if self.enabled and bool(self.bot_token) == bool(self.bot_token_env):
             raise ValueError(
                 "telegram must define exactly one of bot_token or bot_token_env"
+            )
+        if (
+            self.resource_status_interval_seconds is not None
+            and self.resource_status_interval_seconds < 60
+        ):
+            raise ValueError(
+                "telegram resource_status_interval_seconds must be at least 60"
             )
 
     def resolve_bot_token(self) -> str:

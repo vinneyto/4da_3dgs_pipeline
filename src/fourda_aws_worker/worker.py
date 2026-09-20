@@ -15,12 +15,14 @@ from .aws import (
     download_input_video,
     publish_completion,
     publish_started,
+    publish_telegram,
     run_health_check,
     stop_sagemaker_app,
     sync_model_objects,
     upload_directory,
 )
 from .config import AwsWorkerConfig, materialize_pipeline_config
+from .monitoring import TelegramRuntimeMonitoring
 from .status import JobStatus, utc_now
 
 
@@ -57,6 +59,14 @@ def run_worker(job_dir: Path) -> int:
     aws_worker_config = AwsWorkerConfig.from_dict(request["aws_worker"])
     pipeline_config = materialize_pipeline_config(request["pipeline"], aws_worker_config)
     status_path = job_dir / "status.json"
+    monitoring = TelegramRuntimeMonitoring(
+        aws_worker_config,
+        job_dir,
+        lambda subject, message: publish_telegram(
+            aws_worker_config, subject, message
+        ),
+    )
+    monitoring.start()
     status = JobStatus.read(status_path)
     status.update(
         state="running",
@@ -179,6 +189,8 @@ def run_worker(job_dir: Path) -> int:
     except Exception:
         print("Completion notification dispatch failed:", flush=True)
         traceback.print_exc()
+
+    monitoring.stop()
 
     should_stop = aws_worker_config.shutdown_on == "always" or (
         aws_worker_config.shutdown_on == "success" and status.state == "succeeded"

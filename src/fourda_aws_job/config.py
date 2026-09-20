@@ -1,4 +1,4 @@
-"""Configuration for the AWS-aware background-job adapter."""
+"""Configuration for the AWS-specific background job."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .config import FourDAnyoneConfig
+from fourda_pipeline.config import FourDAnyoneConfig
 
 
 VALID_SHUTDOWN_POLICIES = frozenset({"never", "success", "always"})
@@ -34,7 +34,10 @@ class SageMakerAppConfig:
 
 
 @dataclass(frozen=True, slots=True)
-class AwsConfig:
+class AwsJobConfig:
+    job_id: str
+    jobs_dir: Path
+    shutdown_on: str
     region: str
     bucket: str
     input_prefix: str
@@ -45,9 +48,19 @@ class AwsConfig:
     sns: SnsConfig
     sagemaker: SageMakerAppConfig
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "jobs_dir", Path(self.jobs_dir))
+        if not self.jobs_dir.is_absolute():
+            raise ValueError(f"aws_job.jobs_dir must be absolute: {self.jobs_dir}")
+        if self.shutdown_on not in VALID_SHUTDOWN_POLICIES:
+            raise ValueError(f"invalid shutdown policy: {self.shutdown_on}")
+
     @classmethod
-    def from_dict(cls, payload: dict[str, Any]) -> "AwsConfig":
+    def from_dict(cls, payload: dict[str, Any]) -> "AwsJobConfig":
         return cls(
+            job_id=str(payload["job_id"]),
+            jobs_dir=Path(payload["jobs_dir"]),
+            shutdown_on=str(payload.get("shutdown_on", "never")),
             region=str(payload["region"]),
             bucket=str(payload["bucket"]),
             input_prefix=str(payload.get("input_prefix", "input")).strip("/"),
@@ -59,32 +72,15 @@ class AwsConfig:
             sagemaker=SageMakerAppConfig(**payload["sagemaker"]),
         )
 
-
-@dataclass(frozen=True, slots=True)
-class JobConfig:
-    job_id: str
-    jobs_dir: Path
-    shutdown_on: str
-    aws: AwsConfig
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "jobs_dir", Path(self.jobs_dir))
-        if not self.jobs_dir.is_absolute():
-            raise ValueError(f"job.jobs_dir must be absolute: {self.jobs_dir}")
-        if self.shutdown_on not in VALID_SHUTDOWN_POLICIES:
-            raise ValueError(f"invalid shutdown policy: {self.shutdown_on}")
-
     @classmethod
-    def from_document(cls, document: dict[str, Any]) -> "JobConfig":
-        payload = document["job"]
-        return cls(
-            job_id=str(payload["job_id"]),
-            jobs_dir=Path(payload["jobs_dir"]),
-            shutdown_on=str(payload.get("shutdown_on", "never")),
-            aws=AwsConfig.from_dict(document["aws"]),
-        )
+    def from_document(cls, document: dict[str, Any]) -> "AwsJobConfig":
+        try:
+            payload = document["aws_job"]
+        except KeyError as error:
+            raise ValueError("config must contain an aws_job object") from error
+        return cls.from_dict(payload)
 
 
-def load_job_config(path: Path) -> tuple[FourDAnyoneConfig, JobConfig]:
+def load_aws_job_config(path: Path) -> tuple[FourDAnyoneConfig, AwsJobConfig]:
     document = load_document(path)
-    return FourDAnyoneConfig.from_dict(document["pipeline"]), JobConfig.from_document(document)
+    return FourDAnyoneConfig.from_dict(document["pipeline"]), AwsJobConfig.from_document(document)

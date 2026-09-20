@@ -1,4 +1,4 @@
-"""Manage detached 4DAnyone jobs and their AWS integrations."""
+"""Manage detached 4DAnyone AWS jobs."""
 
 from __future__ import annotations
 
@@ -8,9 +8,9 @@ import time
 from dataclasses import asdict
 from pathlib import Path
 
-from .aws_integration import configure_email
-from .job import BackgroundJob
-from .job_config import JobConfig, load_document, load_job_config
+from .aws import configure_email
+from .config import AwsJobConfig, load_aws_job_config, load_document
+from .job import AwsBackgroundJob
 from .status import JobStatus
 
 
@@ -31,9 +31,9 @@ def _print_status(status: JobStatus, as_json: bool = False) -> None:
         print(f"error:    {status.error}")
 
 
-def _logs(job: BackgroundJob, lines: int, follow: bool) -> None:
+def _logs(job: AwsBackgroundJob, lines: int, follow: bool) -> None:
     if not job.log_path.is_file():
-        raise FileNotFoundError(f"job log does not exist yet: {job.log_path}")
+        raise FileNotFoundError(f"AWS job log does not exist yet: {job.log_path}")
     initial = job.log_path.read_text(errors="replace").splitlines()
     for line in initial[-lines:]:
         print(line)
@@ -51,22 +51,21 @@ def _logs(job: BackgroundJob, lines: int, follow: bool) -> None:
             time.sleep(1)
 
 
-def _job_from_config(path: Path) -> tuple[BackgroundJob, JobConfig]:
-    document = load_document(path)
-    job_config = JobConfig.from_document(document)
-    return BackgroundJob(job_config.job_id, job_config.jobs_dir), job_config
+def _job_from_config(path: Path) -> tuple[AwsBackgroundJob, AwsJobConfig]:
+    config = AwsJobConfig.from_document(load_document(path))
+    return AwsBackgroundJob(config.job_id, config.jobs_dir), config
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="fourda-job")
+    parser = argparse.ArgumentParser(prog="fourda-aws-job")
     commands = parser.add_subparsers(dest="command", required=True)
 
     for name, help_text in (
         ("configure-email", "Create the configured SNS topic and email subscription"),
-        ("start", "Start a detached background job"),
-        ("status", "Show durable job state"),
-        ("logs", "Show or follow job output"),
-        ("stop", "Send SIGTERM to the worker process group"),
+        ("start", "Start a detached AWS background job"),
+        ("status", "Show durable AWS job state"),
+        ("logs", "Show or follow AWS job output"),
+        ("stop", "Send SIGTERM to the AWS worker process group"),
     ):
         command = commands.add_parser(name, help=help_text)
         command.add_argument("--config", type=Path, required=True)
@@ -81,23 +80,18 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_parser().parse_args()
     if args.command == "configure-email":
-        _, job_config = _job_from_config(args.config)
-        result = configure_email(job_config.aws)
+        _, config = _job_from_config(args.config)
+        result = configure_email(config)
         print(json.dumps(result, indent=2, sort_keys=True))
         print("Confirm the AWS Subscription Confirmation email before relying on notifications.")
         return
 
-    job, job_config = _job_from_config(args.config)
+    job, config = _job_from_config(args.config)
     if args.command == "start":
-        pipeline_config, _ = load_job_config(args.config)
+        pipeline_config, _ = load_aws_job_config(args.config)
         request = {
             "pipeline": pipeline_config.to_dict(),
-            "job": {
-                "job_id": job_config.job_id,
-                "jobs_dir": str(job_config.jobs_dir),
-                "shutdown_on": job_config.shutdown_on,
-            },
-            "aws": asdict(job_config.aws),
+            "aws_job": asdict(config),
         }
         status = job.start(request)
         _print_status(status)

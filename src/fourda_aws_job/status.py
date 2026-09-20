@@ -1,4 +1,4 @@
-"""Durable job status stored on the SageMaker Space volume."""
+"""Durable AWS job status stored on the SageMaker Space volume."""
 
 from __future__ import annotations
 

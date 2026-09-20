@@ -1,8 +1,8 @@
 import json
 from pathlib import Path
 
+from fourda_aws_job.config import load_aws_job_config
 from fourda_pipeline.config import load_pipeline_config
-from fourda_pipeline.job_config import load_job_config
 
 
 def document(tmp_path: Path) -> dict:
@@ -15,12 +15,10 @@ def document(tmp_path: Path) -> dict:
             "model_dir": str(tmp_path / "models"),
             "runs_dir": str(tmp_path / "runs"),
         },
-        "job": {
+        "aws_job": {
             "job_id": "leo",
             "jobs_dir": str(tmp_path / "jobs"),
             "shutdown_on": "success",
-        },
-        "aws": {
             "region": "us-east-1",
             "bucket": "cp-4da-test",
             "input_prefix": "input",
@@ -36,8 +34,7 @@ def document(tmp_path: Path) -> dict:
 
 def test_local_pipeline_reads_only_pipeline_section(tmp_path: Path) -> None:
     payload = document(tmp_path)
-    del payload["job"]
-    del payload["aws"]
+    del payload["aws_job"]
     path = tmp_path / "run.json"
     path.write_text(json.dumps(payload))
 
@@ -46,13 +43,13 @@ def test_local_pipeline_reads_only_pipeline_section(tmp_path: Path) -> None:
     assert "s3" not in config.to_dict()
 
 
-def test_job_reads_aws_boundary_from_same_document(tmp_path: Path) -> None:
+def test_aws_job_reads_its_boundary_from_same_document(tmp_path: Path) -> None:
     path = tmp_path / "run.json"
     path.write_text(json.dumps(document(tmp_path)))
 
-    pipeline, job = load_job_config(path)
+    pipeline, job = load_aws_job_config(path)
     assert pipeline.experiment_name == "leo"
     assert job.jobs_dir == tmp_path / "jobs"
-    assert job.aws.bucket == "cp-4da-test"
-    assert job.aws.upload_input is True
+    assert job.bucket == "cp-4da-test"
+    assert job.upload_input is True
     assert job.shutdown_on == "success"

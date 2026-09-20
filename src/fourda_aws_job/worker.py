@@ -1,4 +1,4 @@
-"""Worker process for a durable AWS-aware background pipeline job."""
+"""Worker process for a durable AWS background job."""
 
 from __future__ import annotations
 
@@ -8,28 +8,24 @@ import os
 import traceback
 from pathlib import Path
 
-from .aws_integration import (
-    publish_completion,
-    stop_sagemaker_app,
-    upload_directory,
-    upload_input_video,
-)
-from .config import FourDAnyoneConfig
-from .job_config import AwsConfig
-from .pipeline import FourDAnyonePipeline
-from .progress import ProgressUpdate
+from fourda_pipeline.config import FourDAnyoneConfig
+from fourda_pipeline.pipeline import FourDAnyonePipeline
+from fourda_pipeline.progress import ProgressUpdate
+
+from .aws import publish_completion, stop_sagemaker_app, upload_directory, upload_input_video
+from .config import AwsJobConfig
 from .status import JobStatus, utc_now
 
 
 def _notification_text(
     status: JobStatus,
-    request: dict,
+    config: AwsJobConfig,
     result: dict | None,
     input_s3_uri: str | None,
-    s3_uri: str | None,
+    result_s3_uri: str | None,
 ) -> str:
     lines = [
-        f"4DAnyone job: {status.job_id}",
+        f"4DAnyone AWS job: {status.job_id}",
         f"State: {status.state}",
         f"Message: {status.message}",
     ]
@@ -39,27 +35,26 @@ def _notification_text(
                 f"Experiment: {result['experiment_name']}",
                 f"S3 input: {input_s3_uri or 'upload disabled'}",
                 f"Local result: {result['experiment_dir']}",
-                f"S3 result: {s3_uri or 'upload disabled'}",
+                f"S3 result: {result_s3_uri or 'upload disabled'}",
                 f"Elapsed seconds: {result['elapsed_seconds']:.1f}",
             ]
         )
     elif status.error:
         lines.append(f"Error: {status.error}")
-    lines.append(f"Shutdown policy: {request['job']['shutdown_on']}")
+    lines.append(f"Shutdown policy: {config.shutdown_on}")
     return "\n".join(lines)
 
 
 def run_worker(job_dir: Path) -> int:
     request = json.loads((job_dir / "request.json").read_text())
     pipeline_config = FourDAnyoneConfig.from_dict(request["pipeline"])
-    aws_config = AwsConfig.from_dict(request["aws"])
-    shutdown_on = request["job"]["shutdown_on"]
+    aws_job_config = AwsJobConfig.from_dict(request["aws_job"])
     status_path = job_dir / "status.json"
     status = JobStatus.read(status_path)
     status.update(
         state="running",
         stage="validation",
-        message="Pipeline worker is running",
+        message="AWS job worker is running",
         pid=os.getpid(),
         started_at=utc_now(),
     )
@@ -80,39 +75,42 @@ def run_worker(job_dir: Path) -> int:
 
     result: dict | None = None
     input_s3_uri: str | None = None
-    s3_uri: str | None = None
+    result_s3_uri: str | None = None
     exit_code = 0
     try:
-        if aws_config.upload_input:
+        if aws_job_config.upload_input:
             status.update(
                 state="running",
                 stage="input-upload",
                 progress=0.01,
-                message=f"Uploading input video to s3://{aws_config.bucket}",
+                message=f"Uploading input video to s3://{aws_job_config.bucket}",
             )
             status.write(status_path)
-            input_s3_uri = upload_input_video(aws_config, pipeline_config.video_path)
+            input_s3_uri = upload_input_video(aws_job_config, pipeline_config.video_path)
             print(f"Uploaded input video to {input_s3_uri}", flush=True)
+
         result = FourDAnyonePipeline(pipeline_config, on_progress=on_progress).run()
-        if aws_config.upload_results:
+
+        if aws_job_config.upload_results:
             status.update(
                 state="running",
-                stage="upload",
+                stage="result-upload",
                 progress=0.96,
-                message=f"Uploading result to s3://{aws_config.bucket}",
+                message=f"Uploading result to s3://{aws_job_config.bucket}",
             )
             status.write(status_path)
-            s3_uri = upload_directory(
-                aws_config,
+            result_s3_uri = upload_directory(
+                aws_job_config,
                 pipeline_config.experiment_dir,
                 pipeline_config.experiment_name,
             )
-            print(f"Uploaded result to {s3_uri}", flush=True)
+            print(f"Uploaded result to {result_s3_uri}", flush=True)
+
         status.update(
             state="succeeded",
             stage="complete",
             progress=1.0,
-            message="Pipeline completed successfully",
+            message="AWS job completed successfully",
             finished_at=utc_now(),
             result_path=str(pipeline_config.experiment_dir / "pipeline-result.json"),
         )
@@ -122,7 +120,7 @@ def run_worker(job_dir: Path) -> int:
         status.update(
             state="failed",
             stage="failed",
-            message=f"Pipeline failed: {error}",
+            message=f"AWS job failed: {error}",
             error=repr(error),
             finished_at=utc_now(),
         )
@@ -131,20 +129,22 @@ def run_worker(job_dir: Path) -> int:
 
     try:
         publish_completion(
-            aws_config,
-            f"4DAnyone {status.state}: {status.job_id}",
-            _notification_text(status, request, result, input_s3_uri, s3_uri),
+            aws_job_config,
+            f"4DAnyone AWS job {status.state}: {status.job_id}",
+            _notification_text(status, aws_job_config, result, input_s3_uri, result_s3_uri),
         )
         print("SNS completion notification sent", flush=True)
     except Exception:
         print("SNS completion notification failed:", flush=True)
         traceback.print_exc()
 
-    should_stop = shutdown_on == "always" or (shutdown_on == "success" and status.state == "succeeded")
+    should_stop = aws_job_config.shutdown_on == "always" or (
+        aws_job_config.shutdown_on == "success" and status.state == "succeeded"
+    )
     if should_stop:
         try:
             print("Requesting SageMaker JupyterLab App shutdown", flush=True)
-            stop_sagemaker_app(aws_config.region, aws_config.sagemaker)
+            stop_sagemaker_app(aws_job_config.region, aws_job_config.sagemaker)
         except Exception:
             print("SageMaker App shutdown request failed:", flush=True)
             traceback.print_exc()

@@ -31,12 +31,10 @@
     "export_device": "cuda:0",
     "resume": false
   },
-  "job": {
+  "aws_job": {
     "job_id": "leon_video_72views_01",
     "jobs_dir": "/home/sagemaker-user/4danyone-data/jobs",
-    "shutdown_on": "success"
-  },
-  "aws": {
+    "shutdown_on": "success",
     "region": "us-east-1",
     "bucket": "cp-4da-REPLACE_WITH_DEPLOYMENT_ID",
     "input_prefix": "input",

@@ -20,7 +20,7 @@ dev = [
 
 [project.scripts]
 fourda-pipeline = "fourda_pipeline.cli:main"
-fourda-job = "fourda_pipeline.job_cli:main"
+fourda-aws-job = "fourda_aws_job.cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

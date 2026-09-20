@@ -14,8 +14,8 @@ DEFAULT_FRAME_INDICES = (60,)
 
 def load_pipeline_config(path: Path) -> "FourDAnyoneConfig":
     document = json.loads(path.read_text())
-    if document.get("schema_version") != 1:
-        raise ValueError("config schema_version must be 1")
+    if document.get("schema_version") not in (1, 2):
+        raise ValueError("config schema_version must be 1 or 2")
     try:
         payload = document["pipeline"]
     except KeyError as error:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .config import AwsWorkerConfig, SageMakerAppConfig
@@ -69,6 +69,8 @@ class AwsHealthCheckResult:
     topic_arn: str
     subscription_arn: str
     sagemaker_app_status: str | None
+    video_s3_uri: str
+    model_object_count: int
 
 
 def _confirmed_email_subscription(sns: Any, arn: str, email: str) -> str:
@@ -128,10 +130,20 @@ def run_health_check(config: AwsWorkerConfig, job_id: str) -> AwsHealthCheckResu
 
     s3 = boto3.client("s3", region_name=config.region)
     s3.head_bucket(Bucket=config.bucket)
+    video_bucket, video_key = config.video_s3_location
+    s3.head_object(Bucket=video_bucket, Key=video_key)
+
+    model_object_count = 0
+    if config.sync_models:
+        response = s3.list_objects_v2(
+            Bucket=config.bucket,
+            Prefix=f"{config.models_prefix}/" if config.models_prefix else "",
+            MaxKeys=1,
+        )
+        model_object_count = int(response.get("KeyCount", 0))
+
     prefixes: list[str] = []
-    if config.upload_input:
-        prefixes.append(_probe_s3_prefix(s3, config, config.input_prefix, job_id))
-    if config.upload_results and config.runs_prefix not in prefixes:
+    if config.upload_results:
         prefixes.append(_probe_s3_prefix(s3, config, config.runs_prefix, job_id))
 
     sns = boto3.client("sns", region_name=config.region)
@@ -160,39 +172,83 @@ def run_health_check(config: AwsWorkerConfig, job_id: str) -> AwsHealthCheckResu
         topic_arn=arn,
         subscription_arn=subscription_arn,
         sagemaker_app_status=app_status,
+        video_s3_uri=config.video_s3_uri,
+        model_object_count=model_object_count,
     )
+    return result
+
+
+def publish_started(
+    config: AwsWorkerConfig, result: AwsHealthCheckResult, experiment_name: str
+) -> None:
     publish_notification(
         config,
-        f"4DAnyone AWS job started: {job_id}",
+        f"4DAnyone AWS job started: {config.job_id}",
         "\n".join(
             [
-                f"4DAnyone AWS worker health check passed for job {job_id}.",
+                f"4DAnyone AWS worker health check passed for job {config.job_id}.",
+                f"Experiment: {experiment_name}",
                 f"Account: {result.account}",
                 f"Caller: {result.caller_arn}",
-                f"S3 bucket: {result.bucket}",
-                f"Writable prefixes: {', '.join(result.writable_prefixes) or 'none required'}",
+                f"S3 input: {result.video_s3_uri}",
+                f"Local input: {config.local_video_path}",
+                f"Model objects visible in S3: {result.model_object_count}",
                 f"SNS topic: {result.topic_arn}",
                 f"SageMaker App: {result.sagemaker_app_status or 'shutdown disabled'}",
-                "The 4DAnyone pipeline is starting now.",
+                "Input staging completed. The 4DAnyone pipeline is starting now.",
             ]
         ),
     )
-    return result
+
+
+def download_input_video(config: AwsWorkerConfig) -> Path:
+    client = _boto3().client("s3", region_name=config.region)
+    bucket, key = config.video_s3_location
+    metadata = client.head_object(Bucket=bucket, Key=key)
+    destination = config.local_video_path
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.is_file() and destination.stat().st_size == metadata["ContentLength"]:
+        return destination
+    temporary = destination.with_suffix(destination.suffix + ".download")
+    client.download_file(bucket, key, str(temporary))
+    temporary.replace(destination)
+    return destination
+
+
+def sync_model_objects(config: AwsWorkerConfig) -> tuple[int, int]:
+    """Download changed S3 model objects, preserving the persistent EBS cache."""
+    if not config.sync_models:
+        return 0, 0
+    client = _boto3().client("s3", region_name=config.region)
+    prefix = f"{config.models_prefix}/" if config.models_prefix else ""
+    paginator = client.get_paginator("list_objects_v2")
+    found = 0
+    downloaded = 0
+    config.local.model_dir.mkdir(parents=True, exist_ok=True)
+    for page in paginator.paginate(Bucket=config.bucket, Prefix=prefix):
+        for item in page.get("Contents", []):
+            key = item["Key"]
+            relative = key[len(prefix) :]
+            if not relative or relative.endswith("/"):
+                continue
+            relative_path = PurePosixPath(relative)
+            if relative_path.is_absolute() or ".." in relative_path.parts:
+                raise ValueError(f"unsafe model object key: {key}")
+            found += 1
+            destination = config.local.model_dir.joinpath(*relative_path.parts)
+            if destination.is_file() and destination.stat().st_size == item["Size"]:
+                continue
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            temporary = destination.with_suffix(destination.suffix + ".download")
+            client.download_file(config.bucket, key, str(temporary))
+            temporary.replace(destination)
+            downloaded += 1
+    return found, downloaded
 
 
 def experiment_s3_uri(config: AwsWorkerConfig, experiment_name: str) -> str:
     key = "/".join(part for part in (config.runs_prefix, experiment_name) if part)
     return f"s3://{config.bucket}/{key}/"
-
-
-def upload_input_video(config: AwsWorkerConfig, video_path: Path) -> str:
-    key = "/".join(part for part in (config.input_prefix, video_path.name) if part)
-    _boto3().client("s3", region_name=config.region).upload_file(
-        str(video_path),
-        config.bucket,
-        key,
-    )
-    return f"s3://{config.bucket}/{key}"
 
 
 def upload_directory(config: AwsWorkerConfig, source: Path, experiment_name: str) -> str:

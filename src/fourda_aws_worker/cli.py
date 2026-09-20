@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import json
 import time
-from dataclasses import asdict
 from pathlib import Path
 
 from .aws import configure_email
@@ -88,10 +87,11 @@ def main() -> None:
 
     job, config = _job_from_config(args.config)
     if args.command == "start":
-        pipeline_config, _ = load_aws_worker_config(args.config)
+        load_aws_worker_config(args.config)
+        document = load_document(args.config)
         request = {
-            "pipeline": pipeline_config.to_dict(),
-            "aws_worker": asdict(config),
+            "pipeline": document["pipeline"],
+            "aws_worker": config.to_dict(),
         }
         status = job.start(request)
         _print_status(status)

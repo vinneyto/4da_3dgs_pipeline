@@ -14,6 +14,9 @@ dependencies = []
 aws = [
   "boto3>=1.35,<2",
 ]
+rerun = [
+  "rerun-sdk>=0.23,<1",
+]
 dev = [
   "pytest>=8,<9",
 ]
@@ -22,6 +25,7 @@ dev = [
 fourda-pipeline = "fourda_pipeline.cli:main"
 fourda-aws-worker = "fourda_aws_worker.cli:main"
 fourda-worker-config = "fourda_aws_worker.config_cli:main"
+fourda-rerun = "fourda_rerun.cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

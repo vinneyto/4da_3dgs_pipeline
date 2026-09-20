@@ -7,6 +7,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from fourda_rerun.config import RerunConfig
+
 
 DEFAULT_LAYER_PITCHES = (-15, 0, 15)
 DEFAULT_FRAME_INDICES = (60,)
@@ -14,8 +16,8 @@ DEFAULT_FRAME_INDICES = (60,)
 
 def load_pipeline_config(path: Path) -> "FourDAnyoneConfig":
     document = json.loads(path.read_text())
-    if document.get("schema_version") not in (1, 2):
-        raise ValueError("config schema_version must be 1 or 2")
+    if document.get("schema_version") not in (1, 2, 3):
+        raise ValueError("config schema_version must be 1, 2 or 3")
     try:
         payload = document["pipeline"]
     except KeyError as error:
@@ -42,6 +44,7 @@ class FourDAnyoneConfig:
     frame_indices: tuple[int, ...] = DEFAULT_FRAME_INDICES
     export_device: str = "cuda:0"
     resume: bool = False
+    rerun: RerunConfig = RerunConfig()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "video_path", Path(self.video_path))
@@ -50,6 +53,8 @@ class FourDAnyoneConfig:
         object.__setattr__(self, "runs_dir", Path(self.runs_dir))
         object.__setattr__(self, "layer_pitches", tuple(int(value) for value in self.layer_pitches))
         object.__setattr__(self, "frame_indices", tuple(int(value) for value in self.frame_indices))
+        if isinstance(self.rerun, dict):
+            object.__setattr__(self, "rerun", RerunConfig.from_dict(self.rerun))
         self.validate_values()
 
     @property
@@ -67,6 +72,14 @@ class FourDAnyoneConfig:
     @property
     def datasets_dir(self) -> Path:
         return self.experiment_dir / "nerfstudio"
+
+    @property
+    def rerun_dir(self) -> Path:
+        return self.experiment_dir / "rerun"
+
+    @property
+    def rerun_path(self) -> Path:
+        return self.rerun_dir / f"{self.experiment_name}.rrd"
 
     def dataset_dir(self, frame_index: int) -> Path:
         return self.datasets_dir / f"frame_{frame_index:03d}"
@@ -125,7 +138,9 @@ class FourDAnyoneConfig:
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "FourDAnyoneConfig":
-        return cls(**payload)
+        values = dict(payload)
+        values["rerun"] = RerunConfig.from_dict(values.get("rerun"))
+        return cls(**values)
 
     def write_json(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)

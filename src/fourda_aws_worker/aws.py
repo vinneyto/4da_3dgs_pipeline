@@ -178,7 +178,7 @@ def _probe_s3_prefix(s3: Any, config: AwsWorkerConfig, prefix: str, job_id: str)
     )
     body = json.dumps({"job_id": job_id, "purpose": "fourda-aws-worker health check"})
     s3.put_object(
-        Bucket=config.bucket,
+        Bucket=config.bucket_name,
         Key=key,
         Body=body.encode("utf-8"),
         ContentType="application/json",
@@ -186,7 +186,7 @@ def _probe_s3_prefix(s3: Any, config: AwsWorkerConfig, prefix: str, job_id: str)
     # Delete is not required by the worker itself. Clean up when the execution
     # role allows it, but do not turn an optional permission into a prerequisite.
     try:
-        s3.delete_object(Bucket=config.bucket, Key=key)
+        s3.delete_object(Bucket=config.bucket_name, Key=key)
     except Exception:
         pass
     return prefix
@@ -199,14 +199,14 @@ def run_health_check(config: AwsWorkerConfig, job_id: str) -> AwsHealthCheckResu
     identity = boto3.client("sts", region_name=config.region).get_caller_identity()
 
     s3 = boto3.client("s3", region_name=config.region)
-    s3.head_bucket(Bucket=config.bucket)
+    s3.head_bucket(Bucket=config.bucket_name)
     video_bucket, video_key = config.video_s3_location
     s3.head_object(Bucket=video_bucket, Key=video_key)
 
     model_object_count = 0
     if config.sync_models:
         response = s3.list_objects_v2(
-            Bucket=config.bucket,
+            Bucket=config.bucket_name,
             Prefix=f"{config.models_prefix}/" if config.models_prefix else "",
             MaxKeys=1,
         )
@@ -253,7 +253,7 @@ def run_health_check(config: AwsWorkerConfig, job_id: str) -> AwsHealthCheckResu
     result = AwsHealthCheckResult(
         account=identity["Account"],
         caller_arn=identity["Arn"],
-        bucket=config.bucket,
+        bucket=config.bucket_name,
         writable_prefixes=tuple(prefixes),
         topic_arn=arn,
         subscription_arn=subscription_arn,
@@ -314,7 +314,7 @@ def sync_model_objects(config: AwsWorkerConfig) -> tuple[int, int]:
     found = 0
     downloaded = 0
     config.local.model_dir.mkdir(parents=True, exist_ok=True)
-    for page in paginator.paginate(Bucket=config.bucket, Prefix=prefix):
+    for page in paginator.paginate(Bucket=config.bucket_name, Prefix=prefix):
         for item in page.get("Contents", []):
             key = item["Key"]
             relative = key[len(prefix) :]
@@ -329,7 +329,7 @@ def sync_model_objects(config: AwsWorkerConfig) -> tuple[int, int]:
                 continue
             destination.parent.mkdir(parents=True, exist_ok=True)
             temporary = destination.with_suffix(destination.suffix + ".download")
-            client.download_file(config.bucket, key, str(temporary))
+            client.download_file(config.bucket_name, key, str(temporary))
             temporary.replace(destination)
             downloaded += 1
     return found, downloaded
@@ -337,7 +337,7 @@ def sync_model_objects(config: AwsWorkerConfig) -> tuple[int, int]:
 
 def experiment_s3_uri(config: AwsWorkerConfig, experiment_name: str) -> str:
     key = "/".join(part for part in (config.runs_prefix, experiment_name) if part)
-    return f"s3://{config.bucket}/{key}/"
+    return f"s3://{config.bucket_name}/{key}/"
 
 
 def upload_directory(config: AwsWorkerConfig, source: Path, experiment_name: str) -> str:
@@ -346,7 +346,7 @@ def upload_directory(config: AwsWorkerConfig, source: Path, experiment_name: str
     for path in source.rglob("*"):
         if path.is_file():
             key = f"{prefix}/{path.relative_to(source).as_posix()}"
-            client.upload_file(str(path), config.bucket, key)
+            client.upload_file(str(path), config.bucket_name, key)
     return experiment_s3_uri(config, experiment_name)
 
 

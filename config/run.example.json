@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "environment": {
     "conda_bootstrap": "/opt/conda/etc/profile.d/conda.sh",
     "conda_env": "/home/sagemaker-user/.conda/envs/4danyone",
@@ -25,16 +25,23 @@
     "attention_backend": "auto",
     "frame": 60,
     "export_device": "cuda:0",
-    "resume": false
+    "resume": false,
+    "rerun": {
+      "enabled": true,
+      "view_count": 4,
+      "device": "auto"
+    }
   },
   "aws_worker": {
     "job_id": "leo_one_layer_24views_01",
     "region": "us-east-1",
-    "bucket": "cp-4da-REPLACE_WITH_DEPLOYMENT_ID",
-    "s3_video_path": "s3://cp-4da-REPLACE_WITH_DEPLOYMENT_ID/input/leo.MOV",
-    "input_prefix": "input",
-    "models_prefix": "models",
-    "runs_prefix": "runs",
+    "bucket": {
+      "name": "cp-4da-REPLACE_WITH_DEPLOYMENT_ID",
+      "video": "leo.MOV",
+      "input_prefix": "input",
+      "models_prefix": "models",
+      "runs_prefix": "runs"
+    },
     "sync_models": true,
     "upload_results": true,
     "shutdown_on": "never",

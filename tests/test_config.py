@@ -48,6 +48,21 @@ def test_config_round_trip(tmp_path: Path) -> None:
     assert restored == original
 
 
+def test_rerun_can_be_enabled_with_one_flag(tmp_path: Path) -> None:
+    config = FourDAnyoneConfig.from_dict(
+        {
+            "video_path": str(tmp_path / "leo.MOV"),
+            "experiment_name": "rerun",
+            "fourdanyone_root": str(tmp_path / "4DAnyone"),
+            "model_dir": str(tmp_path / "models"),
+            "runs_dir": str(tmp_path / "runs"),
+            "rerun": True,
+        }
+    )
+    assert config.rerun.enabled is True
+    assert config.rerun.view_count == 4
+
+
 def test_paths_must_be_absolute() -> None:
     with pytest.raises(ValueError, match="all paths must be absolute"):
         FourDAnyoneConfig(

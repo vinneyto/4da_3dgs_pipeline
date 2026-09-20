@@ -68,7 +68,7 @@ def test_aws_worker_reads_its_boundary_from_same_document(tmp_path: Path) -> Non
     assert pipeline.model_dir == tmp_path / "data/models"
     assert pipeline.frame_indices == (60,)
     assert worker.jobs_dir == tmp_path / "data/jobs"
-    assert worker.bucket == "cp-4da-test"
+    assert worker.bucket.name == "cp-4da-test"
     assert worker.video_s3_uri == "s3://cp-4da-test/input/leo.MOV"
     assert worker.shutdown_on == "success"
 

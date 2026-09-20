@@ -14,7 +14,7 @@ from .config import AwsWorkerConfig, materialize_pipeline_config
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="fourda-worker-config",
-        description="Generate a validated schema-v2 JSON document for fourda-aws-worker.",
+        description="Generate a validated schema-v3 JSON document for fourda-aws-worker.",
     )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--force", action="store_true", help="Replace an existing output file")
@@ -33,10 +33,23 @@ def build_parser() -> argparse.ArgumentParser:
     pipeline.add_argument("--attention-backend", default="auto")
     pipeline.add_argument("--export-device", default="cuda:0")
     pipeline.add_argument("--resume", action=argparse.BooleanOptionalAction, default=False)
+    pipeline.add_argument(
+        "--rerun",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Create an interactive Rerun recording after reconstruction",
+    )
+    pipeline.add_argument("--rerun-view-count", type=int, default=4)
+    pipeline.add_argument("--rerun-device", default="auto")
 
     aws = parser.add_argument_group("AWS worker")
-    aws.add_argument("--s3-video-path", required=True)
-    aws.add_argument("--bucket", help="Inferred from an s3:// video URI when omitted")
+    video = aws.add_mutually_exclusive_group(required=True)
+    video.add_argument("--video", help="Path relative to the bucket input prefix")
+    video.add_argument(
+        "--s3-video-path",
+        help="Deprecated full S3 input URI; use --bucket and --video",
+    )
+    aws.add_argument("--bucket", help="Required with --video; inferred for legacy S3 URIs")
     aws.add_argument("--region", default="us-east-1")
     aws.add_argument("--input-prefix", default="input")
     aws.add_argument("--models-prefix", default="models")
@@ -99,6 +112,24 @@ def _resolve_bucket(s3_video_path: str, explicit_bucket: str | None) -> str:
     raise ValueError("--bucket is required when --s3-video-path is not a full s3:// URI")
 
 
+def _resolve_video(args: argparse.Namespace) -> tuple[str, str]:
+    input_prefix = args.input_prefix.strip("/")
+    if args.video:
+        if not args.bucket:
+            raise ValueError("--bucket is required with --video")
+        return args.bucket, args.video
+
+    bucket = _resolve_bucket(args.s3_video_path, args.bucket)
+    parsed = urlparse(args.s3_video_path)
+    key = parsed.path.lstrip("/") if parsed.scheme == "s3" else args.s3_video_path.strip("/")
+    prefix = f"{input_prefix}/" if input_prefix else ""
+    if prefix and key.startswith(prefix):
+        key = key[len(prefix) :]
+    elif "/" in key and input_prefix:
+        raise ValueError("--s3-video-path must be inside --input-prefix")
+    return bucket, key
+
+
 def build_document(args: argparse.Namespace) -> dict[str, Any]:
     if bool(args.sns_topic_name) != bool(args.notification_email):
         raise ValueError(
@@ -111,10 +142,10 @@ def build_document(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError(
             "Telegram log/resource options require --telegram-chat-id"
         )
-    bucket = _resolve_bucket(args.s3_video_path, args.bucket)
+    bucket, video = _resolve_video(args)
     job_id = args.job_id or args.experiment_name
     document: dict[str, Any] = {
-        "schema_version": 2,
+        "schema_version": 3,
         "pipeline": {
             "experiment_name": args.experiment_name,
             "views_per_layer": args.views_per_layer,
@@ -128,15 +159,22 @@ def build_document(args: argparse.Namespace) -> dict[str, Any]:
             "frame": args.frame,
             "export_device": args.export_device,
             "resume": args.resume,
+            "rerun": {
+                "enabled": args.rerun,
+                "view_count": args.rerun_view_count,
+                "device": args.rerun_device,
+            },
         },
         "aws_worker": {
             "job_id": job_id,
             "region": args.region,
-            "bucket": bucket,
-            "s3_video_path": args.s3_video_path,
-            "input_prefix": args.input_prefix,
-            "models_prefix": args.models_prefix,
-            "runs_prefix": args.runs_prefix,
+            "bucket": {
+                "name": bucket,
+                "video": video,
+                "input_prefix": args.input_prefix,
+                "models_prefix": args.models_prefix,
+                "runs_prefix": args.runs_prefix,
+            },
             "sync_models": args.sync_models,
             "upload_results": args.upload_results,
             "shutdown_on": args.shutdown_on,
@@ -196,9 +234,15 @@ def main(argv: Sequence[str] | None = None) -> None:
     except (FileExistsError, KeyError, TypeError, ValueError) as error:
         parser.error(str(error))
     total_views = args.views_per_layer * len(args.layer_pitches)
+    bucket_config = document["aws_worker"]["bucket"]
+    video_key = "/".join(
+        part
+        for part in (bucket_config["input_prefix"].strip("/"), bucket_config["video"])
+        if part
+    )
     print(f"Wrote AWS worker config: {args.output}")
     print(f"Job: {args.job_id or args.experiment_name}")
-    print(f"Input: {args.s3_video_path}")
+    print(f"Input: s3://{bucket_config['name']}/{video_key}")
     print(f"Target views: {total_views}")
 
 

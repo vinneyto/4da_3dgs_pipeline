@@ -125,7 +125,7 @@ def run_worker(job_dir: Path) -> int:
             progress=0.06,
             message=(
                 "Synchronizing models from "
-                f"s3://{aws_worker_config.bucket}/{aws_worker_config.models_prefix}/"
+                f"s3://{aws_worker_config.bucket_name}/{aws_worker_config.models_prefix}/"
             ),
         )
         status.write(status_path)
@@ -148,7 +148,7 @@ def run_worker(job_dir: Path) -> int:
                 state="running",
                 stage="result-upload",
                 progress=0.96,
-                message=f"Uploading result to s3://{aws_worker_config.bucket}",
+                message=f"Uploading result to s3://{aws_worker_config.bucket_name}",
             )
             status.write(status_path)
             result_s3_uri = upload_directory(

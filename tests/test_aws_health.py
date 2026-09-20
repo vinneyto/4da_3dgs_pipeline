@@ -6,6 +6,7 @@ from pathlib import Path
 from fourda_aws_worker import aws
 from fourda_aws_worker.config import (
     AwsWorkerConfig,
+    BucketConfig,
     LocalWorkspaceConfig,
     SageMakerAppConfig,
     SnsConfig,
@@ -118,11 +119,13 @@ def make_config(
         job_id="job-01",
         shutdown_on=shutdown_on,
         region="us-east-1",
-        bucket="fourda-test",
-        s3_video_path="s3://fourda-test/input/leo.MOV",
-        input_prefix="input",
-        runs_prefix="runs",
-        models_prefix="models",
+        bucket=BucketConfig(
+            name="fourda-test",
+            video="leo.MOV",
+            input_prefix="input",
+            runs_prefix="runs",
+            models_prefix="models",
+        ),
         sync_models=True,
         upload_results=True,
         local=LocalWorkspaceConfig(

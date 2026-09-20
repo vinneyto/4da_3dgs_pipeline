@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from fourda_pipeline.config import FourDAnyoneConfig
+from fourda_pipeline.config import FourDAnyoneConfig, extract_4danyone_dataset_config
 
 
 def make_config(tmp_path: Path, **changes) -> FourDAnyoneConfig:
@@ -71,4 +71,18 @@ def test_paths_must_be_absolute() -> None:
             fourdanyone_root=Path("4DAnyone"),
             model_dir=Path("models"),
             runs_dir=Path("runs"),
+        )
+
+
+def test_reconstruction_stage_is_not_silently_ignored() -> None:
+    with pytest.raises(ValueError, match="not implemented"):
+        extract_4danyone_dataset_config(
+            {
+                "experiment_name": "leo",
+                "dataset": {"type": "4danyone", "config": {}},
+                "reconstruction": {
+                    "type": "nerfstudio_splatfacto",
+                    "config": {},
+                },
+            }
         )

@@ -14,7 +14,7 @@ from .config import AwsWorkerConfig, materialize_pipeline_config
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="fourda-worker-config",
-        description="Generate a validated schema-v3 JSON document for fourda-aws-worker.",
+        description="Generate a validated schema-v4 JSON document for fourda-aws-worker.",
     )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--force", action="store_true", help="Replace an existing output file")
@@ -145,24 +145,31 @@ def build_document(args: argparse.Namespace) -> dict[str, Any]:
     bucket, video = _resolve_video(args)
     job_id = args.job_id or args.experiment_name
     document: dict[str, Any] = {
-        "schema_version": 3,
+        "schema_version": 4,
         "pipeline": {
             "experiment_name": args.experiment_name,
-            "views_per_layer": args.views_per_layer,
-            "layer_pitches": args.layer_pitches,
-            "start_yaw": args.start_yaw,
-            "yaw_span": args.yaw_span,
-            "target_fps": args.target_fps,
-            "seed": args.seed,
-            "turbo": args.turbo,
-            "attention_backend": args.attention_backend,
-            "frame": args.frame,
-            "export_device": args.export_device,
-            "resume": args.resume,
-            "rerun": {
-                "enabled": args.rerun,
-                "view_count": args.rerun_view_count,
-                "device": args.rerun_device,
+            "dataset": {
+                "type": "4danyone",
+                "config": {
+                    "views_per_layer": args.views_per_layer,
+                    "layer_pitches": args.layer_pitches,
+                    "start_yaw": args.start_yaw,
+                    "yaw_span": args.yaw_span,
+                    "target_fps": args.target_fps,
+                    "seed": args.seed,
+                    "turbo": args.turbo,
+                    "attention_backend": args.attention_backend,
+                    "frame": args.frame,
+                    "export_device": args.export_device,
+                    "resume": args.resume,
+                },
+                "artifacts": {
+                    "rerun": {
+                        "enabled": args.rerun,
+                        "view_count": args.rerun_view_count,
+                        "device": args.rerun_device,
+                    }
+                },
             },
         },
         "aws_worker": {

@@ -12,17 +12,71 @@ from fourda_rerun.config import RerunConfig
 
 DEFAULT_LAYER_PITCHES = (-15, 0, 15)
 DEFAULT_FRAME_INDICES = (60,)
+SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4})
+FOURDANYONE_DATASET_TYPE = "4danyone"
+
+
+def extract_4danyone_dataset_config(pipeline: dict[str, Any]) -> dict[str, Any]:
+    """Return the concrete dataset configuration from a pipeline document.
+
+    Schema v4 models the pipeline as typed, optional stages. Earlier schemas
+    stored the 4DAnyone settings directly in the pipeline object.
+    """
+    if "dataset" not in pipeline:
+        return dict(pipeline)
+
+    stage = pipeline["dataset"]
+    if not isinstance(stage, dict):
+        raise TypeError("pipeline.dataset must be an object")
+    stage_type = stage.get("type")
+    if stage_type != FOURDANYONE_DATASET_TYPE:
+        raise ValueError(
+            f"unsupported pipeline.dataset.type {stage_type!r}; "
+            f"expected {FOURDANYONE_DATASET_TYPE!r}"
+        )
+    config = stage.get("config", {})
+    artifacts = stage.get("artifacts", {})
+    if not isinstance(config, dict):
+        raise TypeError("pipeline.dataset.config must be an object")
+    if not isinstance(artifacts, dict):
+        raise TypeError("pipeline.dataset.artifacts must be an object")
+
+    values = dict(config)
+    experiment_name = pipeline.get("experiment_name")
+    if experiment_name is not None:
+        configured_name = values.get("experiment_name")
+        if configured_name is not None and configured_name != experiment_name:
+            raise ValueError(
+                "pipeline.experiment_name and "
+                "pipeline.dataset.config.experiment_name must match"
+            )
+        values["experiment_name"] = experiment_name
+    if "rerun" in values and "rerun" in artifacts:
+        raise ValueError(
+            "configure Rerun in pipeline.dataset.artifacts, not dataset.config"
+        )
+    values["rerun"] = artifacts.get("rerun")
+
+    reconstruction = pipeline.get("reconstruction")
+    if reconstruction is not None:
+        raise ValueError(
+            "pipeline.reconstruction is configured, but 3DGS reconstruction "
+            "is not implemented yet"
+        )
+    return values
 
 
 def load_pipeline_config(path: Path) -> "FourDAnyoneConfig":
     document = json.loads(path.read_text())
-    if document.get("schema_version") not in (1, 2, 3):
-        raise ValueError("config schema_version must be 1, 2 or 3")
+    if document.get("schema_version") not in SUPPORTED_SCHEMA_VERSIONS:
+        raise ValueError(
+            f"config schema_version must be one of {sorted(SUPPORTED_SCHEMA_VERSIONS)}"
+        )
     try:
         payload = document["pipeline"]
     except KeyError as error:
         raise ValueError("config must contain a pipeline object") from error
-    return FourDAnyoneConfig.from_dict(payload)
+    return FourDAnyoneConfig.from_dict(extract_4danyone_dataset_config(payload))
 
 @dataclass(frozen=True, slots=True)
 class FourDAnyoneConfig:

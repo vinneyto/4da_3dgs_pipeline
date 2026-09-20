@@ -1,21 +1,31 @@
 {
-  "schema_version": 2,
+  "schema_version": 4,
   "pipeline": {
-    "video_path": "/absolute/path/to/input/leo.MOV",
     "experiment_name": "leo_one_layer_24views_01",
-    "fourdanyone_root": "/absolute/path/to/4DAnyone",
-    "model_dir": "/absolute/path/to/4danyone-data/models",
-    "runs_dir": "/absolute/path/to/4danyone-data/runs",
-    "views_per_layer": 24,
-    "layer_pitches": [0],
-    "start_yaw": 0,
-    "yaw_span": 360,
-    "target_fps": 30.0,
-    "seed": 42,
-    "enable_turbo": true,
-    "attention_backend": "auto",
-    "frame_indices": [60],
-    "export_device": "cuda:0",
-    "resume": false
+    "dataset": {
+      "type": "4danyone",
+      "config": {
+        "video_path": "/absolute/path/to/input/leo.MOV",
+        "fourdanyone_root": "/absolute/path/to/4DAnyone",
+        "model_dir": "/absolute/path/to/4danyone-data/models",
+        "runs_dir": "/absolute/path/to/4danyone-data/runs",
+        "views_per_layer": 24,
+        "layer_pitches": [0],
+        "start_yaw": 0,
+        "yaw_span": 360,
+        "target_fps": 30.0,
+        "seed": 42,
+        "enable_turbo": true,
+        "attention_backend": "auto",
+        "frame_indices": [60],
+        "export_device": "cuda:0",
+        "resume": false
+      },
+      "artifacts": {
+        "rerun": {
+          "enabled": false
+        }
+      }
+    }
   }
 }

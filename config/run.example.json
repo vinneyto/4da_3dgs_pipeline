@@ -1,5 +1,5 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "environment": {
     "conda_bootstrap": "/opt/conda/etc/profile.d/conda.sh",
     "conda_env": "/home/sagemaker-user/.conda/envs/4danyone",
@@ -15,21 +15,28 @@
   },
   "pipeline": {
     "experiment_name": "leo_one_layer_24views_01",
-    "views_per_layer": 24,
-    "layer_pitches": [0],
-    "start_yaw": 0,
-    "yaw_span": 360,
-    "target_fps": 30.0,
-    "seed": 42,
-    "turbo": true,
-    "attention_backend": "auto",
-    "frame": 60,
-    "export_device": "cuda:0",
-    "resume": false,
-    "rerun": {
-      "enabled": true,
-      "view_count": 4,
-      "device": "auto"
+    "dataset": {
+      "type": "4danyone",
+      "config": {
+        "views_per_layer": 24,
+        "layer_pitches": [0],
+        "start_yaw": 0,
+        "yaw_span": 360,
+        "target_fps": 30.0,
+        "seed": 42,
+        "turbo": true,
+        "attention_backend": "auto",
+        "frame": 60,
+        "export_device": "cuda:0",
+        "resume": false
+      },
+      "artifacts": {
+        "rerun": {
+          "enabled": true,
+          "view_count": 4,
+          "device": "auto"
+        }
+      }
     }
   },
   "aws_worker": {

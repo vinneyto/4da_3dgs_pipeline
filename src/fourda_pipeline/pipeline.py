@@ -134,10 +134,46 @@ class FourDAnyonePipeline:
                 if not transforms.is_file():
                     raise RuntimeError(f"export completed without transforms.json: {destination}")
                 message = f"Exported synchronized frame {frame_index}"
-            fraction = 0.80 + ((offset + 1) / count) * 0.15
+            export_span = 0.10 if config.rerun.enabled else 0.19
+            fraction = 0.80 + ((offset + 1) / count) * export_span
             self._progress("export", fraction, message)
             results.append({"frame_index": frame_index, "dataset_dir": str(destination)})
         return results
+
+    def _export_rerun(self) -> str | None:
+        config = self.config
+        if not config.rerun.enabled:
+            return None
+        if config.resume and config.rerun_path.is_file():
+            self._progress("rerun", 0.99, "Reusing existing Rerun recording")
+            return str(config.rerun_path)
+        if config.rerun_path.exists():
+            if config.rerun.replace_existing:
+                config.rerun_path.unlink()
+            else:
+                raise FileExistsError(
+                    f"Rerun output already exists: {config.rerun_path}; "
+                    "set artifacts.dataset.rerun.replace_existing=true to replace it"
+                )
+
+        from fourda_rerun.exporter import RerunExporter
+
+        def on_rerun_progress(current: int, total: int, message: str) -> None:
+            fraction = 0.90 + (current / total) * 0.09
+            self._progress("rerun", fraction, message)
+
+        self._progress("rerun", 0.90, "Building camera and skeleton recording")
+        output = RerunExporter(
+            generation=config.rerun_generation_dir,
+            output=config.rerun_path,
+            experiment=config.experiment_name,
+            fourdanyone_root=config.fourdanyone_root,
+            model_dir=config.model_dir,
+            view_count=config.rerun.view_count,
+            device=config.rerun.device,
+            on_progress=on_rerun_progress,
+        ).export()
+        return str(output)
 
     def run(self) -> dict[str, Any]:
         self._progress("validation", 0.01, "Validating pipeline configuration")
@@ -147,8 +183,13 @@ class FourDAnyonePipeline:
         self._progress("validation", 0.05, f"Camera plan: {self.config.num_views} views")
 
         started = datetime.now(UTC)
-        self._run_inference()
-        datasets = self._export_datasets()
+        if self.config.dataset_enabled:
+            self._run_inference()
+            datasets = self._export_datasets()
+        else:
+            datasets = []
+            self._progress("dataset", 0.80, "Dataset stage disabled")
+        rerun_file = self._export_rerun()
         finished = datetime.now(UTC)
 
         result = {
@@ -156,6 +197,7 @@ class FourDAnyonePipeline:
             "experiment_dir": str(self.config.experiment_dir),
             "inference_dir": str(self.config.inference_dir),
             "datasets": datasets,
+            "rerun_file": rerun_file,
             "num_views": self.config.num_views,
             "started_at": started.isoformat(),
             "finished_at": finished.isoformat(),

@@ -88,8 +88,8 @@ if [[ ! -x "$CONDA_ENV/bin/ffmpeg" ]]; then
   conda install --prefix "$CONDA_ENV" --channel conda-forge ffmpeg -y
 fi
 
-log "Installing this pipeline with AWS job support"
-"$PYTHON" -m pip install --editable "$PIPELINE_REPO_ROOT[aws]"
+log "Installing this pipeline with AWS job and Rerun support"
+"$PYTHON" -m pip install --editable "$PIPELINE_REPO_ROOT[aws,rerun]"
 "$PYTHON" -m pip install ipykernel
 "$PYTHON" -m ipykernel install --user --name 4danyone --display-name "Python (4DAnyone)"
 

@@ -178,7 +178,7 @@ def _probe_s3_prefix(s3: Any, config: AwsWorkerConfig, prefix: str, job_id: str)
     )
     body = json.dumps({"job_id": job_id, "purpose": "fourda-aws-worker health check"})
     s3.put_object(
-        Bucket=config.bucket,
+        Bucket=config.bucket_name,
         Key=key,
         Body=body.encode("utf-8"),
         ContentType="application/json",
@@ -186,27 +186,33 @@ def _probe_s3_prefix(s3: Any, config: AwsWorkerConfig, prefix: str, job_id: str)
     # Delete is not required by the worker itself. Clean up when the execution
     # role allows it, but do not turn an optional permission into a prerequisite.
     try:
-        s3.delete_object(Bucket=config.bucket, Key=key)
+        s3.delete_object(Bucket=config.bucket_name, Key=key)
     except Exception:
         pass
     return prefix
 
 
-def run_health_check(config: AwsWorkerConfig, job_id: str) -> AwsHealthCheckResult:
+def run_health_check(
+    config: AwsWorkerConfig,
+    job_id: str,
+    *,
+    require_input_video: bool = True,
+) -> AwsHealthCheckResult:
     """Validate every AWS dependency before expensive pipeline work begins."""
     boto3 = _boto3()
 
     identity = boto3.client("sts", region_name=config.region).get_caller_identity()
 
     s3 = boto3.client("s3", region_name=config.region)
-    s3.head_bucket(Bucket=config.bucket)
+    s3.head_bucket(Bucket=config.bucket_name)
     video_bucket, video_key = config.video_s3_location
-    s3.head_object(Bucket=video_bucket, Key=video_key)
+    if require_input_video:
+        s3.head_object(Bucket=video_bucket, Key=video_key)
 
     model_object_count = 0
     if config.sync_models:
         response = s3.list_objects_v2(
-            Bucket=config.bucket,
+            Bucket=config.bucket_name,
             Prefix=f"{config.models_prefix}/" if config.models_prefix else "",
             MaxKeys=1,
         )
@@ -253,7 +259,7 @@ def run_health_check(config: AwsWorkerConfig, job_id: str) -> AwsHealthCheckResu
     result = AwsHealthCheckResult(
         account=identity["Account"],
         caller_arn=identity["Arn"],
-        bucket=config.bucket,
+        bucket=config.bucket_name,
         writable_prefixes=tuple(prefixes),
         topic_arn=arn,
         subscription_arn=subscription_arn,
@@ -284,7 +290,7 @@ def publish_started(
                 f"Email notifications: {result.email_status}",
                 f"Telegram notifications: {result.telegram_status}",
                 f"SageMaker App: {result.sagemaker_app_status or 'shutdown disabled'}",
-                "Input staging completed. The 4DAnyone pipeline is starting now.",
+                "Required inputs are staged. The configured tasks are starting now.",
             ]
         ),
     )
@@ -314,7 +320,7 @@ def sync_model_objects(config: AwsWorkerConfig) -> tuple[int, int]:
     found = 0
     downloaded = 0
     config.local.model_dir.mkdir(parents=True, exist_ok=True)
-    for page in paginator.paginate(Bucket=config.bucket, Prefix=prefix):
+    for page in paginator.paginate(Bucket=config.bucket_name, Prefix=prefix):
         for item in page.get("Contents", []):
             key = item["Key"]
             relative = key[len(prefix) :]
@@ -329,15 +335,54 @@ def sync_model_objects(config: AwsWorkerConfig) -> tuple[int, int]:
                 continue
             destination.parent.mkdir(parents=True, exist_ok=True)
             temporary = destination.with_suffix(destination.suffix + ".download")
-            client.download_file(config.bucket, key, str(temporary))
+            client.download_file(config.bucket_name, key, str(temporary))
             temporary.replace(destination)
             downloaded += 1
     return found, downloaded
 
 
+def sync_experiment_results(
+    config: AwsWorkerConfig,
+    experiment_name: str,
+    destination: Path,
+) -> tuple[int, int]:
+    """Restore one prior experiment from S3 for artifact-only jobs."""
+    client = _boto3().client("s3", region_name=config.region)
+    prefix = "/".join(
+        part for part in (config.runs_prefix, experiment_name) if part
+    ).rstrip("/") + "/"
+    paginator = client.get_paginator("list_objects_v2")
+    found = 0
+    downloaded = 0
+    destination.mkdir(parents=True, exist_ok=True)
+    for page in paginator.paginate(Bucket=config.bucket_name, Prefix=prefix):
+        for item in page.get("Contents", []):
+            key = item["Key"]
+            relative = key[len(prefix) :]
+            if not relative or relative.endswith("/"):
+                continue
+            relative_path = PurePosixPath(relative)
+            if relative_path.is_absolute() or ".." in relative_path.parts:
+                raise ValueError(f"unsafe experiment object key: {key}")
+            found += 1
+            target = destination.joinpath(*relative_path.parts)
+            if target.is_file() and target.stat().st_size == item["Size"]:
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            temporary = target.with_suffix(target.suffix + ".download")
+            client.download_file(config.bucket_name, key, str(temporary))
+            temporary.replace(target)
+            downloaded += 1
+    if found == 0:
+        raise FileNotFoundError(
+            f"No source experiment objects found at s3://{config.bucket_name}/{prefix}"
+        )
+    return found, downloaded
+
+
 def experiment_s3_uri(config: AwsWorkerConfig, experiment_name: str) -> str:
     key = "/".join(part for part in (config.runs_prefix, experiment_name) if part)
-    return f"s3://{config.bucket}/{key}/"
+    return f"s3://{config.bucket_name}/{key}/"
 
 
 def upload_directory(config: AwsWorkerConfig, source: Path, experiment_name: str) -> str:
@@ -346,7 +391,7 @@ def upload_directory(config: AwsWorkerConfig, source: Path, experiment_name: str
     for path in source.rglob("*"):
         if path.is_file():
             key = f"{prefix}/{path.relative_to(source).as_posix()}"
-            client.upload_file(str(path), config.bucket, key)
+            client.upload_file(str(path), config.bucket_name, key)
     return experiment_s3_uri(config, experiment_name)
 
 

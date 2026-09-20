@@ -9,11 +9,11 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import urlparse
 
-from fourda_pipeline.config import FourDAnyoneConfig
+from fourda_pipeline.config import FourDAnyoneConfig, extract_4danyone_dataset_config
 
 
 VALID_SHUTDOWN_POLICIES = frozenset({"never", "success", "always"})
-SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2})
+SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5})
 
 
 def load_document(path: Path) -> dict[str, Any]:
@@ -108,15 +108,45 @@ class LocalWorkspaceConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class BucketConfig:
+    """One S3 namespace used by the AWS worker."""
+
+    name: str
+    video: str
+    input_prefix: str = "input"
+    models_prefix: str = "models"
+    runs_prefix: str = "runs"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "input_prefix", self.input_prefix.strip("/"))
+        object.__setattr__(self, "models_prefix", self.models_prefix.strip("/"))
+        object.__setattr__(self, "runs_prefix", self.runs_prefix.strip("/"))
+        video = self.video.strip("/")
+        object.__setattr__(self, "video", video)
+        if not self.name:
+            raise ValueError("aws_worker.bucket.name must not be empty")
+        if self.video.startswith("s3://"):
+            raise ValueError("aws_worker.bucket.video must be relative to input_prefix")
+        path = PurePosixPath(video)
+        if not video or path.is_absolute() or ".." in path.parts or path.name in {"", ".", ".."}:
+            raise ValueError("aws_worker.bucket.video must be a safe relative object path")
+        for field_name in ("input_prefix", "models_prefix", "runs_prefix"):
+            prefix = getattr(self, field_name)
+            prefix_path = PurePosixPath(prefix)
+            if prefix_path.is_absolute() or ".." in prefix_path.parts:
+                raise ValueError(f"aws_worker.bucket.{field_name} must be a safe relative prefix")
+
+    @property
+    def video_key(self) -> str:
+        return "/".join(part for part in (self.input_prefix, self.video) if part)
+
+
+@dataclass(frozen=True, slots=True)
 class AwsWorkerConfig:
     job_id: str
     shutdown_on: str
     region: str
-    bucket: str
-    s3_video_path: str
-    input_prefix: str
-    runs_prefix: str
-    models_prefix: str
+    bucket: BucketConfig
     sync_models: bool
     upload_results: bool
     local: LocalWorkspaceConfig
@@ -129,13 +159,8 @@ class AwsWorkerConfig:
             raise ValueError(f"invalid shutdown policy: {self.shutdown_on}")
         if not self.job_id or any(part in self.job_id for part in ("/", "\\", "..")):
             raise ValueError("job_id must be a simple directory name")
-        source_bucket, source_key = self.video_s3_location
-        if source_bucket != self.bucket:
-            raise ValueError(
-                f"s3_video_path bucket {source_bucket!r} must match aws_worker.bucket {self.bucket!r}"
-            )
-        if PurePosixPath(source_key).name in {"", ".", ".."}:
-            raise ValueError(f"s3_video_path must identify an object: {self.s3_video_path}")
+        if isinstance(self.bucket, dict):
+            object.__setattr__(self, "bucket", BucketConfig(**self.bucket))
 
     @property
     def jobs_dir(self) -> Path:
@@ -143,15 +168,7 @@ class AwsWorkerConfig:
 
     @property
     def video_s3_location(self) -> tuple[str, str]:
-        if self.s3_video_path.startswith("s3://"):
-            parsed = urlparse(self.s3_video_path)
-            if not parsed.netloc or not parsed.path.strip("/"):
-                raise ValueError(f"invalid s3_video_path: {self.s3_video_path}")
-            return parsed.netloc, parsed.path.lstrip("/")
-        key = self.s3_video_path.strip("/")
-        if "/" not in key and self.input_prefix:
-            key = f"{self.input_prefix}/{key}"
-        return self.bucket, key
+        return self.bucket.name, self.bucket.video_key
 
     @property
     def video_s3_uri(self) -> str:
@@ -162,6 +179,22 @@ class AwsWorkerConfig:
     def local_video_path(self) -> Path:
         _, key = self.video_s3_location
         return self.local.input_dir / PurePosixPath(key).name
+
+    @property
+    def bucket_name(self) -> str:
+        return self.bucket.name
+
+    @property
+    def input_prefix(self) -> str:
+        return self.bucket.input_prefix
+
+    @property
+    def models_prefix(self) -> str:
+        return self.bucket.models_prefix
+
+    @property
+    def runs_prefix(self) -> str:
+        return self.bucket.runs_prefix
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "AwsWorkerConfig":
@@ -180,15 +213,41 @@ class AwsWorkerConfig:
             "space_name": payload["sagemaker_space_name"],
             "app_name": payload.get("sagemaker_app_name", "default"),
         }
+        bucket_payload = payload["bucket"]
+        if isinstance(bucket_payload, dict):
+            bucket = BucketConfig(**bucket_payload)
+        else:
+            bucket_name = str(bucket_payload)
+            input_prefix = str(payload.get("input_prefix", "input")).strip("/")
+            legacy_video = str(payload["s3_video_path"])
+            if legacy_video.startswith("s3://"):
+                parsed = urlparse(legacy_video)
+                if parsed.netloc != bucket_name or not parsed.path.strip("/"):
+                    raise ValueError(
+                        "legacy s3_video_path must identify an object in aws_worker.bucket"
+                    )
+                video_key = parsed.path.lstrip("/")
+            else:
+                video_key = legacy_video.strip("/")
+            prefix_with_slash = f"{input_prefix}/" if input_prefix else ""
+            if prefix_with_slash and video_key.startswith(prefix_with_slash):
+                video_key = video_key[len(prefix_with_slash) :]
+            elif "/" in video_key and input_prefix:
+                raise ValueError(
+                    "legacy s3_video_path must be inside aws_worker.input_prefix"
+                )
+            bucket = BucketConfig(
+                name=bucket_name,
+                video=video_key,
+                input_prefix=input_prefix,
+                models_prefix=str(payload.get("models_prefix", "models")),
+                runs_prefix=str(payload.get("runs_prefix", "runs")),
+            )
         return cls(
             job_id=str(payload["job_id"]),
             shutdown_on=str(payload.get("shutdown_on", "never")),
             region=str(payload["region"]),
-            bucket=str(payload["bucket"]),
-            s3_video_path=str(payload["s3_video_path"]),
-            input_prefix=str(payload.get("input_prefix", "input")).strip("/"),
-            runs_prefix=str(payload.get("runs_prefix", "runs")).strip("/"),
-            models_prefix=str(payload.get("models_prefix", "models")).strip("/"),
+            bucket=bucket,
             sync_models=bool(payload.get("sync_models", True)),
             upload_results=bool(payload.get("upload_results", True)),
             local=LocalWorkspaceConfig(**payload["local"]),
@@ -212,7 +271,7 @@ class AwsWorkerConfig:
                 "data_root": str(jobs_dir.parent),
                 "fourdanyone_root": pipeline["fourdanyone_root"],
             }
-        if "s3_video_path" not in payload:
+        if not isinstance(payload.get("bucket"), dict) and "s3_video_path" not in payload:
             pipeline = document.get("pipeline", {})
             filename = Path(pipeline["video_path"]).name
             prefix = str(payload.get("input_prefix", "input")).strip("/")
@@ -228,10 +287,15 @@ class AwsWorkerConfig:
 
 
 def materialize_pipeline_config(
-    pipeline_payload: dict[str, Any], worker: AwsWorkerConfig
+    document: dict[str, Any], worker: AwsWorkerConfig
 ) -> FourDAnyoneConfig:
     """Complete an AWS run's path-free pipeline section with staged local paths."""
-    payload = dict(pipeline_payload)
+    pipeline_payload = document.get("pipeline", document)
+    payload = extract_4danyone_dataset_config(
+        pipeline_payload,
+        experiment_name=document.get("experiment_name"),
+        artifacts=document.get("artifacts"),
+    )
     if "frame" in payload:
         if "frame_indices" in payload:
             raise ValueError("pipeline must use either frame or frame_indices, not both")
@@ -252,8 +316,7 @@ def materialize_pipeline_config(
 def load_aws_worker_config(path: Path) -> tuple[FourDAnyoneConfig, AwsWorkerConfig]:
     document = load_document(path)
     worker = AwsWorkerConfig.from_document(document)
-    try:
-        pipeline_payload = document["pipeline"]
-    except KeyError as error:
+    if "pipeline" not in document:
+        error = KeyError("pipeline")
         raise ValueError("config must contain a pipeline object") from error
-    return materialize_pipeline_config(pipeline_payload, worker), worker
+    return materialize_pipeline_config(document, worker), worker

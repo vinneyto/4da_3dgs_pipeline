@@ -7,20 +7,118 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from fourda_rerun.config import RerunConfig
+
 
 DEFAULT_LAYER_PITCHES = (-15, 0, 15)
 DEFAULT_FRAME_INDICES = (60,)
+SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5})
+FOURDANYONE_DATASET_TYPE = "4danyone"
+
+
+def extract_4danyone_dataset_config(
+    pipeline: dict[str, Any],
+    *,
+    experiment_name: str | None = None,
+    artifacts: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return the concrete dataset configuration from a pipeline document.
+
+    Schema v5 models the pipeline as typed stages and artifacts as independent
+    root tasks. Earlier schemas stored both directly in the pipeline object.
+    """
+    if "dataset" not in pipeline:
+        return dict(pipeline)
+
+    stage = pipeline["dataset"]
+    if not isinstance(stage, dict):
+        raise TypeError("pipeline.dataset must be an object")
+    dataset_enabled = stage.get("enabled", True)
+    if not isinstance(dataset_enabled, bool):
+        raise TypeError("pipeline.dataset.enabled must be a boolean")
+    stage_type = stage.get("type")
+    if dataset_enabled and stage_type != FOURDANYONE_DATASET_TYPE:
+        raise ValueError(
+            f"unsupported pipeline.dataset.type {stage_type!r}; "
+            f"expected {FOURDANYONE_DATASET_TYPE!r}"
+        )
+    config = stage.get("config", {})
+    stage_artifacts = stage.get("artifacts", {})
+    if not isinstance(config, dict):
+        raise TypeError("pipeline.dataset.config must be an object")
+    if not isinstance(stage_artifacts, dict):
+        raise TypeError("pipeline.dataset.artifacts must be an object")
+
+    values = dict(config)
+    experiment_name = experiment_name or pipeline.get("experiment_name")
+    if experiment_name is not None:
+        configured_name = values.get("experiment_name")
+        if configured_name is not None and configured_name != experiment_name:
+            raise ValueError(
+                "pipeline.experiment_name and "
+                "pipeline.dataset.config.experiment_name must match"
+            )
+        values["experiment_name"] = experiment_name
+    root_artifacts = artifacts or {}
+    if not isinstance(root_artifacts, dict):
+        raise TypeError("artifacts must be an object")
+    dataset_artifacts = root_artifacts.get("dataset", {})
+    if not isinstance(dataset_artifacts, dict):
+        raise TypeError("artifacts.dataset must be an object")
+    rerun_payload = dataset_artifacts.get("rerun", stage_artifacts.get("rerun"))
+    if "rerun" in values and rerun_payload is not None:
+        raise ValueError(
+            "configure Rerun in root artifacts, not dataset.config"
+        )
+    values["dataset_enabled"] = dataset_enabled
+    values["rerun"] = rerun_payload
+
+    reconstruction = pipeline.get("reconstruction")
+    if reconstruction is not None:
+        if not isinstance(reconstruction, dict):
+            raise TypeError("pipeline.reconstruction must be an object")
+        reconstruction_enabled = reconstruction.get("enabled", True)
+        if not isinstance(reconstruction_enabled, bool):
+            raise TypeError("pipeline.reconstruction.enabled must be a boolean")
+        if reconstruction_enabled:
+            raise ValueError(
+                "pipeline.reconstruction is enabled, but 3DGS reconstruction "
+                "is not implemented yet"
+            )
+    reconstruction_artifacts = root_artifacts.get("reconstruction", {})
+    if not isinstance(reconstruction_artifacts, dict):
+        raise TypeError("artifacts.reconstruction must be an object")
+    reconstruction_rerun = RerunConfig.from_dict(
+        reconstruction_artifacts.get("rerun")
+    )
+    if reconstruction_rerun.enabled:
+        raise ValueError(
+            "artifacts.reconstruction.rerun is enabled, but 3DGS reconstruction "
+            "artifacts are not implemented yet"
+        )
+    rerun_enabled = RerunConfig.from_dict(rerun_payload).enabled
+    if not dataset_enabled and not rerun_enabled:
+        raise ValueError("no pipeline stage or artifact is enabled")
+    return values
 
 
 def load_pipeline_config(path: Path) -> "FourDAnyoneConfig":
     document = json.loads(path.read_text())
-    if document.get("schema_version") not in (1, 2):
-        raise ValueError("config schema_version must be 1 or 2")
+    if document.get("schema_version") not in SUPPORTED_SCHEMA_VERSIONS:
+        raise ValueError(
+            f"config schema_version must be one of {sorted(SUPPORTED_SCHEMA_VERSIONS)}"
+        )
     try:
         payload = document["pipeline"]
     except KeyError as error:
         raise ValueError("config must contain a pipeline object") from error
-    return FourDAnyoneConfig.from_dict(payload)
+    return FourDAnyoneConfig.from_dict(
+        extract_4danyone_dataset_config(
+            payload,
+            experiment_name=document.get("experiment_name"),
+            artifacts=document.get("artifacts"),
+        )
+    )
 
 @dataclass(frozen=True, slots=True)
 class FourDAnyoneConfig:
@@ -42,6 +140,8 @@ class FourDAnyoneConfig:
     frame_indices: tuple[int, ...] = DEFAULT_FRAME_INDICES
     export_device: str = "cuda:0"
     resume: bool = False
+    dataset_enabled: bool = True
+    rerun: RerunConfig = RerunConfig()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "video_path", Path(self.video_path))
@@ -50,6 +150,8 @@ class FourDAnyoneConfig:
         object.__setattr__(self, "runs_dir", Path(self.runs_dir))
         object.__setattr__(self, "layer_pitches", tuple(int(value) for value in self.layer_pitches))
         object.__setattr__(self, "frame_indices", tuple(int(value) for value in self.frame_indices))
+        if isinstance(self.rerun, dict):
+            object.__setattr__(self, "rerun", RerunConfig.from_dict(self.rerun))
         self.validate_values()
 
     @property
@@ -67,6 +169,26 @@ class FourDAnyoneConfig:
     @property
     def datasets_dir(self) -> Path:
         return self.experiment_dir / "nerfstudio"
+
+    @property
+    def rerun_dir(self) -> Path:
+        return self.experiment_dir / "rerun"
+
+    @property
+    def rerun_path(self) -> Path:
+        return self.rerun_dir / f"{self.experiment_name}.rrd"
+
+    @property
+    def rerun_source_experiment_name(self) -> str:
+        return self.rerun.source_experiment_name or self.experiment_name
+
+    @property
+    def rerun_source_experiment_dir(self) -> Path:
+        return self.runs_dir / self.rerun_source_experiment_name
+
+    @property
+    def rerun_generation_dir(self) -> Path:
+        return self.rerun_source_experiment_dir / "4danyone"
 
     def dataset_dir(self, frame_index: int) -> Path:
         return self.datasets_dir / f"frame_{frame_index:03d}"
@@ -103,12 +225,27 @@ class FourDAnyoneConfig:
             raise ValueError("frame indices must be unique")
 
     def validate_paths(self) -> None:
-        required = (
-            (self.video_path, "input video"),
-            (self.fourdanyone_root / "inference.py", "4DAnyone inference.py"),
-            (self.fourdanyone_root / "scripts/export_nerfstudio.py", "Nerfstudio exporter"),
+        required = [
             (self.fourdanyone_root / "third_party/GVHMR/hmr4d/__init__.py", "GVHMR submodule"),
-        )
+        ]
+        if self.dataset_enabled:
+            required.extend(
+                [
+                    (self.video_path, "input video"),
+                    (self.fourdanyone_root / "inference.py", "4DAnyone inference.py"),
+                    (
+                        self.fourdanyone_root / "scripts/export_nerfstudio.py",
+                        "Nerfstudio exporter",
+                    ),
+                ]
+            )
+        if self.rerun.enabled:
+            required.extend(
+                [
+                    (self.rerun_generation_dir / "metadata.json", "Rerun source metadata"),
+                    (self.rerun_generation_dir / "cameras.json", "Rerun source cameras"),
+                ]
+            )
         missing = [f"{label}: {path}" for path, label in required if not path.is_file()]
         if missing:
             raise FileNotFoundError("Missing required paths:\n" + "\n".join(f" - {item}" for item in missing))
@@ -125,7 +262,9 @@ class FourDAnyoneConfig:
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "FourDAnyoneConfig":
-        return cls(**payload)
+        values = dict(payload)
+        values["rerun"] = RerunConfig.from_dict(values.get("rerun"))
+        return cls(**values)
 
     def write_json(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)

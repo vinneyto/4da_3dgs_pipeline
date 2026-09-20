@@ -68,7 +68,7 @@ def test_aws_worker_reads_its_boundary_from_same_document(tmp_path: Path) -> Non
     assert pipeline.model_dir == tmp_path / "data/models"
     assert pipeline.frame_indices == (60,)
     assert worker.jobs_dir == tmp_path / "data/jobs"
-    assert worker.bucket == "cp-4da-test"
+    assert worker.bucket.name == "cp-4da-test"
     assert worker.video_s3_uri == "s3://cp-4da-test/input/leo.MOV"
     assert worker.shutdown_on == "success"
 
@@ -82,3 +82,28 @@ def test_checked_in_examples_are_parseable() -> None:
     assert local.num_views == 24
     assert pipeline.num_views == 24
     assert worker.video_s3_uri.endswith("/input/leo.MOV")
+
+
+def test_schema_v4_materializes_typed_dataset_stage(tmp_path: Path) -> None:
+    payload = document(tmp_path)
+    payload["schema_version"] = 4
+    payload["pipeline"] = {
+        "experiment_name": "leo-v4",
+        "dataset": {
+            "type": "4danyone",
+            "config": {
+                "views_per_layer": 24,
+                "layer_pitches": [0],
+                "frame": 60,
+            },
+            "artifacts": {"rerun": True},
+        },
+    }
+    path = tmp_path / "run-v4.json"
+    path.write_text(json.dumps(payload))
+
+    pipeline, _ = load_aws_worker_config(path)
+
+    assert pipeline.experiment_name == "leo-v4"
+    assert pipeline.rerun.enabled is True
+    assert pipeline.video_path == tmp_path / "data/input/leo.MOV"

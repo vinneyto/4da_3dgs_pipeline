@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 5,
   "environment": {
     "conda_bootstrap": "/opt/conda/etc/profile.d/conda.sh",
     "conda_env": "/home/sagemaker-user/.conda/envs/4danyone",
@@ -13,28 +13,61 @@
     "opencv_fallback_version": "4.14.0.94",
     "lock_file": "/home/sagemaker-user/4danyone-data/environment/requirements-lock.txt"
   },
+  "experiment_name": "leo_one_layer_24views_01",
   "pipeline": {
-    "experiment_name": "leo_one_layer_24views_01",
-    "views_per_layer": 24,
-    "layer_pitches": [0],
-    "start_yaw": 0,
-    "yaw_span": 360,
-    "target_fps": 30.0,
-    "seed": 42,
-    "turbo": true,
-    "attention_backend": "auto",
-    "frame": 60,
-    "export_device": "cuda:0",
-    "resume": false
+    "dataset": {
+      "enabled": true,
+      "type": "4danyone",
+      "config": {
+        "views_per_layer": 24,
+        "layer_pitches": [0],
+        "start_yaw": 0,
+        "yaw_span": 360,
+        "target_fps": 30.0,
+        "seed": 42,
+        "turbo": true,
+        "attention_backend": "auto",
+        "frame": 60,
+        "export_device": "cuda:0",
+        "resume": false
+      }
+    },
+    "reconstruction": {
+      "enabled": false,
+      "type": "nerfstudio_splatfacto",
+      "config": {}
+    }
+  },
+  "artifacts": {
+    "dataset": {
+      "rerun": {
+        "enabled": true,
+        "source_experiment_name": "leo_one_layer_24views_01",
+        "view_count": 4,
+        "device": "auto",
+        "replace_existing": false
+      }
+    },
+    "reconstruction": {
+      "rerun": {
+        "enabled": false,
+        "source_experiment_name": "leo_one_layer_24views_01",
+        "view_count": 4,
+        "device": "auto",
+        "replace_existing": false
+      }
+    }
   },
   "aws_worker": {
     "job_id": "leo_one_layer_24views_01",
     "region": "us-east-1",
-    "bucket": "cp-4da-REPLACE_WITH_DEPLOYMENT_ID",
-    "s3_video_path": "s3://cp-4da-REPLACE_WITH_DEPLOYMENT_ID/input/leo.MOV",
-    "input_prefix": "input",
-    "models_prefix": "models",
-    "runs_prefix": "runs",
+    "bucket": {
+      "name": "cp-4da-REPLACE_WITH_DEPLOYMENT_ID",
+      "video": "leo.MOV",
+      "input_prefix": "input",
+      "models_prefix": "models",
+      "runs_prefix": "runs"
+    },
     "sync_models": true,
     "upload_results": true,
     "shutdown_on": "never",
@@ -48,9 +81,11 @@
         "resource_status_interval_seconds": null
       }
     },
-    "sagemaker_domain_id": "d-REPLACE_ME",
-    "sagemaker_space_name": "cp-4da-jupyter-REPLACE_WITH_DEPLOYMENT_ID",
-    "sagemaker_app_name": "default",
+    "sagemaker": {
+      "domain_id": "d-REPLACE_ME",
+      "space_name": "cp-4da-jupyter-REPLACE_WITH_DEPLOYMENT_ID",
+      "app_name": "default"
+    },
     "local": {
       "data_root": "/home/sagemaker-user/4danyone-data",
       "fourdanyone_root": "/home/sagemaker-user/work/4DAnyone"

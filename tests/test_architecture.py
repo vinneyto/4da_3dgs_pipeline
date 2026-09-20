@@ -15,3 +15,6 @@ def test_aws_worker_is_a_separate_package() -> None:
     assert (source_root / "fourda_pipeline/pipeline.py").is_file()
     assert (source_root / "fourda_aws_worker/worker.py").is_file()
     assert not (source_root / "fourda_pipeline/worker.py").exists()
+    assert (source_root / "fourda_rerun/exporter.py").is_file()
+    for path in (source_root / "fourda_rerun").glob("*.py"):
+        assert "boto3" not in path.read_text().lower()

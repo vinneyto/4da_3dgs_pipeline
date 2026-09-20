@@ -18,6 +18,7 @@ from .aws import (
     publish_telegram,
     run_health_check,
     stop_sagemaker_app,
+    sync_experiment_results,
     sync_model_objects,
     upload_directory,
 )
@@ -57,7 +58,7 @@ def _notification_text(
 def run_worker(job_dir: Path) -> int:
     request = json.loads((job_dir / "request.json").read_text())
     aws_worker_config = AwsWorkerConfig.from_dict(request["aws_worker"])
-    pipeline_config = materialize_pipeline_config(request["pipeline"], aws_worker_config)
+    pipeline_config = materialize_pipeline_config(request, aws_worker_config)
     status_path = job_dir / "status.json"
     monitoring = TelegramRuntimeMonitoring(
         aws_worker_config,
@@ -102,22 +103,29 @@ def run_worker(job_dir: Path) -> int:
             message="Validating AWS identity, S3, optional notifications, and SageMaker App",
         )
         status.write(status_path)
-        health = run_health_check(aws_worker_config, status.job_id)
+        health = run_health_check(
+            aws_worker_config,
+            status.job_id,
+            require_input_video=pipeline_config.dataset_enabled,
+        )
         print(
             "AWS health check passed: "
             f"caller={health.caller_arn}, bucket={health.bucket}, "
             f"email={health.email_status}, telegram={health.telegram_status}",
             flush=True,
         )
-        status.update(
-            state="running",
-            stage="input-download",
-            progress=0.02,
-            message=f"Downloading input video from {aws_worker_config.video_s3_uri}",
-        )
-        status.write(status_path)
-        video_path = download_input_video(aws_worker_config)
-        print(f"Input video ready at {video_path}", flush=True)
+        if pipeline_config.dataset_enabled:
+            status.update(
+                state="running",
+                stage="input-download",
+                progress=0.02,
+                message=f"Downloading input video from {aws_worker_config.video_s3_uri}",
+            )
+            status.write(status_path)
+            video_path = download_input_video(aws_worker_config)
+            print(f"Input video ready at {video_path}", flush=True)
+        else:
+            print("Dataset stage disabled; input video download skipped", flush=True)
 
         status.update(
             state="running",
@@ -125,7 +133,7 @@ def run_worker(job_dir: Path) -> int:
             progress=0.06,
             message=(
                 "Synchronizing models from "
-                f"s3://{aws_worker_config.bucket}/{aws_worker_config.models_prefix}/"
+                f"s3://{aws_worker_config.bucket_name}/{aws_worker_config.models_prefix}/"
             ),
         )
         status.write(status_path)
@@ -134,6 +142,34 @@ def run_worker(job_dir: Path) -> int:
             f"Model cache ready: {model_count} S3 objects, {downloaded_count} downloaded",
             flush=True,
         )
+
+        if (
+            pipeline_config.rerun.enabled
+            and not all(
+                (pipeline_config.rerun_generation_dir / filename).is_file()
+                for filename in ("metadata.json", "cameras.json")
+            )
+        ):
+            status.update(
+                state="running",
+                stage="source-sync",
+                progress=0.08,
+                message=(
+                    "Restoring source experiment "
+                    f"{pipeline_config.rerun_source_experiment_name} from S3"
+                ),
+            )
+            status.write(status_path)
+            source_count, source_downloaded = sync_experiment_results(
+                aws_worker_config,
+                pipeline_config.rerun_source_experiment_name,
+                pipeline_config.rerun_source_experiment_dir,
+            )
+            print(
+                f"Source experiment ready: {source_count} S3 objects, "
+                f"{source_downloaded} downloaded",
+                flush=True,
+            )
 
         pipeline_config.validate_paths()
         notification_results = publish_started(
@@ -148,7 +184,7 @@ def run_worker(job_dir: Path) -> int:
                 state="running",
                 stage="result-upload",
                 progress=0.96,
-                message=f"Uploading result to s3://{aws_worker_config.bucket}",
+                message=f"Uploading result to s3://{aws_worker_config.bucket_name}",
             )
             status.write(status_path)
             result_s3_uri = upload_directory(

@@ -14,14 +14,60 @@ from .config import AwsWorkerConfig, materialize_pipeline_config
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="fourda-worker-config",
-        description="Generate a validated schema-v2 JSON document for fourda-aws-worker.",
+        description="Generate a validated schema-v5 JSON document for fourda-aws-worker.",
     )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--force", action="store_true", help="Replace an existing output file")
 
+    environment = parser.add_argument_group("persistent execution environment")
+    environment.add_argument(
+        "--conda-bootstrap",
+        type=Path,
+        default=Path("/opt/conda/etc/profile.d/conda.sh"),
+    )
+    environment.add_argument(
+        "--conda-env",
+        type=Path,
+        default=Path("/home/sagemaker-user/.conda/envs/4danyone"),
+    )
+    environment.add_argument(
+        "--pipeline-repo-root",
+        type=Path,
+        default=Path("/home/sagemaker-user/work/4da_3dgs_pipeline"),
+    )
+    environment.add_argument(
+        "--fourdanyone-git-url",
+        default="https://github.com/ant-research/4DAnyone.git",
+    )
+    environment.add_argument(
+        "--fourdanyone-git-ref",
+        default="e38f210827f7b3effbe5b573ea07cfcf17e72dca",
+    )
+    environment.add_argument("--python-version", default="3.11")
+    environment.add_argument("--torch-version", default="2.8.0")
+    environment.add_argument("--torchvision-version", default="0.23.0")
+    environment.add_argument(
+        "--torch-index-url",
+        default="https://download.pytorch.org/whl/cu126",
+    )
+    environment.add_argument("--opencv-fallback-version", default="4.14.0.94")
+    environment.add_argument(
+        "--lock-file",
+        type=Path,
+        default=Path(
+            "/home/sagemaker-user/4danyone-data/environment/requirements-lock.txt"
+        ),
+    )
+
     pipeline = parser.add_argument_group("pipeline")
     pipeline.add_argument("--experiment-name", required=True)
     pipeline.add_argument("--job-id", help="Defaults to --experiment-name")
+    pipeline.add_argument(
+        "--dataset",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Run the 4DAnyone dataset stage",
+    )
     pipeline.add_argument("--views-per-layer", type=int, default=24)
     pipeline.add_argument("--layer-pitches", type=int, nargs="+", default=[0])
     pipeline.add_argument("--start-yaw", type=int, default=0)
@@ -33,10 +79,32 @@ def build_parser() -> argparse.ArgumentParser:
     pipeline.add_argument("--attention-backend", default="auto")
     pipeline.add_argument("--export-device", default="cuda:0")
     pipeline.add_argument("--resume", action=argparse.BooleanOptionalAction, default=False)
+    pipeline.add_argument(
+        "--rerun",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Create an interactive Rerun recording after reconstruction",
+    )
+    pipeline.add_argument("--rerun-view-count", type=int, default=4)
+    pipeline.add_argument("--rerun-device", default="auto")
+    pipeline.add_argument(
+        "--rerun-source-experiment-name",
+        help="Defaults to --experiment-name",
+    )
+    pipeline.add_argument(
+        "--rerun-replace-existing",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+    )
 
     aws = parser.add_argument_group("AWS worker")
-    aws.add_argument("--s3-video-path", required=True)
-    aws.add_argument("--bucket", help="Inferred from an s3:// video URI when omitted")
+    video = aws.add_mutually_exclusive_group(required=True)
+    video.add_argument("--video", help="Path relative to the bucket input prefix")
+    video.add_argument(
+        "--s3-video-path",
+        help="Deprecated full S3 input URI; use --bucket and --video",
+    )
+    aws.add_argument("--bucket", help="Required with --video; inferred for legacy S3 URIs")
     aws.add_argument("--region", default="us-east-1")
     aws.add_argument("--input-prefix", default="input")
     aws.add_argument("--models-prefix", default="models")
@@ -99,6 +167,24 @@ def _resolve_bucket(s3_video_path: str, explicit_bucket: str | None) -> str:
     raise ValueError("--bucket is required when --s3-video-path is not a full s3:// URI")
 
 
+def _resolve_video(args: argparse.Namespace) -> tuple[str, str]:
+    input_prefix = args.input_prefix.strip("/")
+    if args.video:
+        if not args.bucket:
+            raise ValueError("--bucket is required with --video")
+        return args.bucket, args.video
+
+    bucket = _resolve_bucket(args.s3_video_path, args.bucket)
+    parsed = urlparse(args.s3_video_path)
+    key = parsed.path.lstrip("/") if parsed.scheme == "s3" else args.s3_video_path.strip("/")
+    prefix = f"{input_prefix}/" if input_prefix else ""
+    if prefix and key.startswith(prefix):
+        key = key[len(prefix) :]
+    elif "/" in key and input_prefix:
+        raise ValueError("--s3-video-path must be inside --input-prefix")
+    return bucket, key
+
+
 def build_document(args: argparse.Namespace) -> dict[str, Any]:
     if bool(args.sns_topic_name) != bool(args.notification_email):
         raise ValueError(
@@ -111,32 +197,80 @@ def build_document(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError(
             "Telegram log/resource options require --telegram-chat-id"
         )
-    bucket = _resolve_bucket(args.s3_video_path, args.bucket)
+    bucket, video = _resolve_video(args)
     job_id = args.job_id or args.experiment_name
     document: dict[str, Any] = {
-        "schema_version": 2,
+        "schema_version": 5,
+        "environment": {
+            "conda_bootstrap": str(args.conda_bootstrap),
+            "conda_env": str(args.conda_env),
+            "pipeline_repo_root": str(args.pipeline_repo_root),
+            "fourdanyone_git_url": args.fourdanyone_git_url,
+            "fourdanyone_git_ref": args.fourdanyone_git_ref,
+            "python_version": args.python_version,
+            "torch_version": args.torch_version,
+            "torchvision_version": args.torchvision_version,
+            "torch_index_url": args.torch_index_url,
+            "opencv_fallback_version": args.opencv_fallback_version,
+            "lock_file": str(args.lock_file),
+        },
+        "experiment_name": args.experiment_name,
         "pipeline": {
-            "experiment_name": args.experiment_name,
-            "views_per_layer": args.views_per_layer,
-            "layer_pitches": args.layer_pitches,
-            "start_yaw": args.start_yaw,
-            "yaw_span": args.yaw_span,
-            "target_fps": args.target_fps,
-            "seed": args.seed,
-            "turbo": args.turbo,
-            "attention_backend": args.attention_backend,
-            "frame": args.frame,
-            "export_device": args.export_device,
-            "resume": args.resume,
+            "dataset": {
+                "enabled": args.dataset,
+                "type": "4danyone",
+                "config": {
+                    "views_per_layer": args.views_per_layer,
+                    "layer_pitches": args.layer_pitches,
+                    "start_yaw": args.start_yaw,
+                    "yaw_span": args.yaw_span,
+                    "target_fps": args.target_fps,
+                    "seed": args.seed,
+                    "turbo": args.turbo,
+                    "attention_backend": args.attention_backend,
+                    "frame": args.frame,
+                    "export_device": args.export_device,
+                    "resume": args.resume,
+                },
+            },
+            "reconstruction": {
+                "enabled": False,
+                "type": "nerfstudio_splatfacto",
+                "config": {},
+            },
+        },
+        "artifacts": {
+            "dataset": {
+                "rerun": {
+                    "enabled": args.rerun,
+                    "source_experiment_name": (
+                        args.rerun_source_experiment_name or args.experiment_name
+                    ),
+                    "view_count": args.rerun_view_count,
+                    "device": args.rerun_device,
+                    "replace_existing": args.rerun_replace_existing,
+                }
+            },
+            "reconstruction": {
+                "rerun": {
+                    "enabled": False,
+                    "source_experiment_name": args.experiment_name,
+                    "view_count": 4,
+                    "device": "auto",
+                    "replace_existing": False,
+                }
+            },
         },
         "aws_worker": {
             "job_id": job_id,
             "region": args.region,
-            "bucket": bucket,
-            "s3_video_path": args.s3_video_path,
-            "input_prefix": args.input_prefix,
-            "models_prefix": args.models_prefix,
-            "runs_prefix": args.runs_prefix,
+            "bucket": {
+                "name": bucket,
+                "video": video,
+                "input_prefix": args.input_prefix,
+                "models_prefix": args.models_prefix,
+                "runs_prefix": args.runs_prefix,
+            },
             "sync_models": args.sync_models,
             "upload_results": args.upload_results,
             "shutdown_on": args.shutdown_on,
@@ -164,9 +298,11 @@ def build_document(args: argparse.Namespace) -> dict[str, Any]:
                     else None
                 ),
             },
-            "sagemaker_domain_id": args.sagemaker_domain_id,
-            "sagemaker_space_name": args.sagemaker_space_name,
-            "sagemaker_app_name": args.sagemaker_app_name,
+            "sagemaker": {
+                "domain_id": args.sagemaker_domain_id,
+                "space_name": args.sagemaker_space_name,
+                "app_name": args.sagemaker_app_name,
+            },
             "local": {
                 "data_root": str(args.data_root),
                 "fourdanyone_root": str(args.fourdanyone_root),
@@ -174,7 +310,7 @@ def build_document(args: argparse.Namespace) -> dict[str, Any]:
         },
     }
     worker = AwsWorkerConfig.from_document(document)
-    materialize_pipeline_config(document["pipeline"], worker)
+    materialize_pipeline_config(document, worker)
     return document
 
 
@@ -196,10 +332,18 @@ def main(argv: Sequence[str] | None = None) -> None:
     except (FileExistsError, KeyError, TypeError, ValueError) as error:
         parser.error(str(error))
     total_views = args.views_per_layer * len(args.layer_pitches)
+    bucket_config = document["aws_worker"]["bucket"]
+    video_key = "/".join(
+        part
+        for part in (bucket_config["input_prefix"].strip("/"), bucket_config["video"])
+        if part
+    )
     print(f"Wrote AWS worker config: {args.output}")
     print(f"Job: {args.job_id or args.experiment_name}")
-    print(f"Input: {args.s3_video_path}")
+    print(f"Input: s3://{bucket_config['name']}/{video_key}")
     print(f"Target views: {total_views}")
+    print(f"Dataset stage: {'enabled' if args.dataset else 'disabled'}")
+    print(f"Dataset Rerun artifact: {'enabled' if args.rerun else 'disabled'}")
 
 
 if __name__ == "__main__":

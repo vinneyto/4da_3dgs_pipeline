@@ -21,6 +21,7 @@ dev = [
 [project.scripts]
 fourda-pipeline = "fourda_pipeline.cli:main"
 fourda-aws-worker = "fourda_aws_worker.cli:main"
+fourda-worker-config = "fourda_aws_worker.config_cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

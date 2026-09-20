@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "environment": {
+    "conda_bootstrap": "/opt/conda/etc/profile.d/conda.sh",
+    "conda_env": "/home/sagemaker-user/.conda/envs/4danyone",
+    "pipeline_repo_root": "/home/sagemaker-user/work/4da_3dgs_pipeline",
+    "fourdanyone_git_url": "https://github.com/ant-research/4DAnyone.git",
+    "fourdanyone_git_ref": "e38f210827f7b3effbe5b573ea07cfcf17e72dca",
+    "python_version": "3.11",
+    "torch_version": "2.8.0",
+    "torchvision_version": "0.23.0",
+    "torch_index_url": "https://download.pytorch.org/whl/cu126",
+    "opencv_fallback_version": "4.14.0.94",
+    "lock_file": "/home/sagemaker-user/4danyone-data/environment/requirements-lock.txt"
+  },
+  "pipeline": {
+    "video_path": "/home/sagemaker-user/4danyone-data/input/leo.MOV",
+    "experiment_name": "leon_video_72views_01",
+    "fourdanyone_root": "/home/sagemaker-user/work/4DAnyone",
+    "model_dir": "/home/sagemaker-user/4danyone-data/models",
+    "runs_dir": "/home/sagemaker-user/4danyone-data/runs",
+    "views_per_layer": 24,
+    "layer_pitches": [-15, 0, 15],
+    "start_yaw": 0,
+    "yaw_span": 360,
+    "target_fps": 30.0,
+    "seed": 42,
+    "enable_turbo": true,
+    "attention_backend": "auto",
+    "frame_indices": [60],
+    "export_device": "cuda:0",
+    "resume": false
+  },
+  "aws_worker": {
+    "job_id": "leon_video_72views_01",
+    "jobs_dir": "/home/sagemaker-user/4danyone-data/jobs",
+    "shutdown_on": "success",
+    "region": "us-east-1",
+    "bucket": "cp-4da-REPLACE_WITH_DEPLOYMENT_ID",
+    "input_prefix": "input",
+    "models_prefix": "models",
+    "runs_prefix": "runs",
+    "upload_input": true,
+    "upload_results": true,
+    "sns": {
+      "topic_name": "cp-4da-pipeline-REPLACE_WITH_DEPLOYMENT_ID",
+      "email": "you@example.com"
+    },
+    "sagemaker": {
+      "domain_id": "d-REPLACE_ME",
+      "space_name": "cp-4da-jupyter-REPLACE_WITH_DEPLOYMENT_ID",
+      "app_name": "default"
+    }
+  }
+}

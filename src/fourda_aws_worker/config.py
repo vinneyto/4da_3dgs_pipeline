@@ -1,0 +1,86 @@
+"""Configuration for the AWS-specific background worker."""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from fourda_pipeline.config import FourDAnyoneConfig
+
+
+VALID_SHUTDOWN_POLICIES = frozenset({"never", "success", "always"})
+
+
+def load_document(path: Path) -> dict[str, Any]:
+    document = json.loads(path.read_text())
+    if document.get("schema_version") != 1:
+        raise ValueError("config schema_version must be 1")
+    return document
+
+
+@dataclass(frozen=True, slots=True)
+class SnsConfig:
+    topic_name: str
+    email: str
+
+
+@dataclass(frozen=True, slots=True)
+class SageMakerAppConfig:
+    domain_id: str
+    space_name: str
+    app_name: str = "default"
+
+
+@dataclass(frozen=True, slots=True)
+class AwsWorkerConfig:
+    job_id: str
+    jobs_dir: Path
+    shutdown_on: str
+    region: str
+    bucket: str
+    input_prefix: str
+    runs_prefix: str
+    models_prefix: str
+    upload_input: bool
+    upload_results: bool
+    sns: SnsConfig
+    sagemaker: SageMakerAppConfig
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "jobs_dir", Path(self.jobs_dir))
+        if not self.jobs_dir.is_absolute():
+            raise ValueError(f"aws_worker.jobs_dir must be absolute: {self.jobs_dir}")
+        if self.shutdown_on not in VALID_SHUTDOWN_POLICIES:
+            raise ValueError(f"invalid shutdown policy: {self.shutdown_on}")
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "AwsWorkerConfig":
+        return cls(
+            job_id=str(payload["job_id"]),
+            jobs_dir=Path(payload["jobs_dir"]),
+            shutdown_on=str(payload.get("shutdown_on", "never")),
+            region=str(payload["region"]),
+            bucket=str(payload["bucket"]),
+            input_prefix=str(payload.get("input_prefix", "input")).strip("/"),
+            runs_prefix=str(payload.get("runs_prefix", "runs")).strip("/"),
+            models_prefix=str(payload.get("models_prefix", "models")).strip("/"),
+            upload_input=bool(payload.get("upload_input", True)),
+            upload_results=bool(payload.get("upload_results", True)),
+            sns=SnsConfig(**payload["sns"]),
+            sagemaker=SageMakerAppConfig(**payload["sagemaker"]),
+        )
+
+    @classmethod
+    def from_document(cls, document: dict[str, Any]) -> "AwsWorkerConfig":
+        try:
+            payload = document["aws_worker"]
+        except KeyError as error:
+            raise ValueError("config must contain an aws_worker object") from error
+        return cls.from_dict(payload)
+
+
+def load_aws_worker_config(path: Path) -> tuple[FourDAnyoneConfig, AwsWorkerConfig]:
+    document = load_document(path)
+    return FourDAnyoneConfig.from_dict(document["pipeline"]), AwsWorkerConfig.from_document(document)

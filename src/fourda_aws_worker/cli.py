@@ -9,7 +9,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from .aws import configure_email
-from .config import AwsJobConfig, load_aws_job_config, load_document
+from .config import AwsWorkerConfig, load_aws_worker_config, load_document
 from .job import AwsBackgroundJob
 from .status import JobStatus
 
@@ -51,13 +51,13 @@ def _logs(job: AwsBackgroundJob, lines: int, follow: bool) -> None:
             time.sleep(1)
 
 
-def _job_from_config(path: Path) -> tuple[AwsBackgroundJob, AwsJobConfig]:
-    config = AwsJobConfig.from_document(load_document(path))
+def _job_from_config(path: Path) -> tuple[AwsBackgroundJob, AwsWorkerConfig]:
+    config = AwsWorkerConfig.from_document(load_document(path))
     return AwsBackgroundJob(config.job_id, config.jobs_dir), config
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="fourda-aws-job")
+    parser = argparse.ArgumentParser(prog="fourda-aws-worker")
     commands = parser.add_subparsers(dest="command", required=True)
 
     for name, help_text in (
@@ -88,10 +88,10 @@ def main() -> None:
 
     job, config = _job_from_config(args.config)
     if args.command == "start":
-        pipeline_config, _ = load_aws_job_config(args.config)
+        pipeline_config, _ = load_aws_worker_config(args.config)
         request = {
             "pipeline": pipeline_config.to_dict(),
-            "aws_job": asdict(config),
+            "aws_worker": asdict(config),
         }
         status = job.start(request)
         _print_status(status)

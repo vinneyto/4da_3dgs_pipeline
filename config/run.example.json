@@ -31,7 +31,7 @@
     "export_device": "cuda:0",
     "resume": false
   },
-  "aws_job": {
+  "aws_worker": {
     "job_id": "leon_video_72views_01",
     "jobs_dir": "/home/sagemaker-user/4danyone-data/jobs",
     "shutdown_on": "success",

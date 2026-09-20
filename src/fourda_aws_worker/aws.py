@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .config import AwsJobConfig, SageMakerAppConfig
+from .config import AwsWorkerConfig, SageMakerAppConfig
 
 
 def _boto3():
@@ -15,7 +15,7 @@ def _boto3():
     return boto3
 
 
-def configure_email(config: AwsJobConfig) -> dict[str, str]:
+def configure_email(config: AwsWorkerConfig) -> dict[str, str]:
     sns = _boto3().client("sns", region_name=config.region)
     topic_arn = sns.create_topic(
         Name=config.sns.topic_name,
@@ -38,13 +38,13 @@ def configure_email(config: AwsJobConfig) -> dict[str, str]:
     }
 
 
-def topic_arn(config: AwsJobConfig) -> str:
+def topic_arn(config: AwsWorkerConfig) -> str:
     return _boto3().client("sns", region_name=config.region).create_topic(
         Name=config.sns.topic_name
     )["TopicArn"]
 
 
-def publish_completion(config: AwsJobConfig, subject: str, message: str) -> None:
+def publish_completion(config: AwsWorkerConfig, subject: str, message: str) -> None:
     _boto3().client("sns", region_name=config.region).publish(
         TopicArn=topic_arn(config),
         Subject=subject[:100],
@@ -52,12 +52,12 @@ def publish_completion(config: AwsJobConfig, subject: str, message: str) -> None
     )
 
 
-def experiment_s3_uri(config: AwsJobConfig, experiment_name: str) -> str:
+def experiment_s3_uri(config: AwsWorkerConfig, experiment_name: str) -> str:
     key = "/".join(part for part in (config.runs_prefix, experiment_name) if part)
     return f"s3://{config.bucket}/{key}/"
 
 
-def upload_input_video(config: AwsJobConfig, video_path: Path) -> str:
+def upload_input_video(config: AwsWorkerConfig, video_path: Path) -> str:
     key = "/".join(part for part in (config.input_prefix, video_path.name) if part)
     _boto3().client("s3", region_name=config.region).upload_file(
         str(video_path),
@@ -67,7 +67,7 @@ def upload_input_video(config: AwsJobConfig, video_path: Path) -> str:
     return f"s3://{config.bucket}/{key}"
 
 
-def upload_directory(config: AwsJobConfig, source: Path, experiment_name: str) -> str:
+def upload_directory(config: AwsWorkerConfig, source: Path, experiment_name: str) -> str:
     client = _boto3().client("s3", region_name=config.region)
     prefix = "/".join(part for part in (config.runs_prefix, experiment_name) if part)
     for path in source.rglob("*"):

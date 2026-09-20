@@ -10,7 +10,7 @@ The repository deliberately separates the local pipeline from AWS orchestration.
 |---|---|---|
 | `FourDAnyonePipeline` | 4DAnyone inference and local Nerfstudio/3DGS export | None |
 | `fourda-pipeline` | Blocking local CLI around `FourDAnyonePipeline` | None |
-| `fourda-aws-job` | AWS-specific detached execution, durable status, S3 input/result upload, SNS email, SageMaker App shutdown | Optional `[aws]` extra |
+| `fourda-aws-worker` | AWS-specific detached execution, durable job status, S3 input/result upload, SNS email, SageMaker App shutdown | Optional `[aws]` extra |
 
 `fourda-pipeline` never imports `boto3`, reads environment variables, uploads files, or calls an AWS API. The same core can run on a workstation, another cloud provider, or inside a future managed SageMaker Job.
 
@@ -18,10 +18,10 @@ The source tree mirrors this boundary:
 
 ```text
 src/fourda_pipeline/   # cloud-independent pipeline and blocking CLI
-src/fourda_aws_job/    # AWS background job, S3, SNS, and SageMaker adapter
+src/fourda_aws_worker/ # AWS worker, background jobs, S3, SNS, and SageMaker
 ```
 
-`fourda-aws-job` is currently a console-based simulation of a future managed SageMaker Job. It runs the core pipeline as a detached process inside a JupyterLab App and owns every AWS-side effect. A future RunPod or local job adapter can be added as another package without modifying `fourda_pipeline`.
+`fourda-aws-worker` is currently a console-based worker that simulates a future managed SageMaker Job. It runs the core pipeline as a detached job inside a JupyterLab App and owns every AWS-side effect. A future RunPod or local worker can be added as another package without modifying `fourda_pipeline`.
 
 ## One JSON run document
 
@@ -35,7 +35,7 @@ Edit `config/run.json` before running anything. It has four sections:
 
 - `environment`: installation paths and pinned dependency versions used by setup scripts;
 - `pipeline`: local input, output, model, camera, and export parameters;
-- `aws_job`: background job identity, status directory, shutdown policy, region, bucket, S3 prefixes, upload switches, SNS, and SageMaker App identity.
+- `aws_worker`: background job identity, status directory, shutdown policy, region, bucket, S3 prefixes, upload switches, SNS, and SageMaker App identity.
 
 The local CLI only requires `schema_version` and `pipeline`. The other sections may be omitted for a completely local run.
 
@@ -101,7 +101,7 @@ python -m pip install -e .
 Place the licensed SMPL-X archive at the bucket and prefix specified in the JSON document. With the example layout, the object is:
 
 ```text
-s3://<aws_job.bucket>/<aws_job.models_prefix>/smplx/models_smplx_v1_1.zip
+s3://<aws_worker.bucket>/<aws_worker.models_prefix>/smplx/models_smplx_v1_1.zip
 ```
 
 Then run:
@@ -135,27 +135,27 @@ Set `pipeline.resume` to `true` to reuse successfully completed intermediate out
 Start the detached worker:
 
 ```bash
-fourda-aws-job start --config config/run.json
+fourda-aws-worker start --config config/run.json
 ```
 
 After it starts, the terminal, VS Code, and browser tab may be closed. The process continues inside the running JupyterLab App.
 
 ```bash
-fourda-aws-job status --config config/run.json
-fourda-aws-job status --config config/run.json --json
-fourda-aws-job logs --config config/run.json --lines 200
-fourda-aws-job logs --config config/run.json --follow
-fourda-aws-job stop --config config/run.json
+fourda-aws-worker status --config config/run.json
+fourda-aws-worker status --config config/run.json --json
+fourda-aws-worker logs --config config/run.json --lines 200
+fourda-aws-worker logs --config config/run.json --follow
+fourda-aws-worker stop --config config/run.json
 ```
 
 The job layer:
 
-1. uploads the local input video to `s3://<bucket>/<input_prefix>/<filename>` when `aws_job.upload_input` is `true`;
+1. uploads the local input video to `s3://<bucket>/<input_prefix>/<filename>` when `aws_worker.upload_input` is `true`;
 2. starts the AWS-independent core pipeline with the local `pipeline.video_path`;
-3. records stage-based progress in `<aws_job.jobs_dir>/<aws_job.job_id>/status.json`;
-4. uploads the completed experiment to `s3://<bucket>/<runs_prefix>/<experiment_name>/` when `aws_job.upload_results` is `true`;
+3. records stage-based progress in `<aws_worker.jobs_dir>/<aws_worker.job_id>/status.json`;
+4. uploads the completed experiment to `s3://<bucket>/<runs_prefix>/<experiment_name>/` when `aws_worker.upload_results` is `true`;
 5. sends an SNS success or failure email;
-6. applies `aws_job.shutdown_on` and optionally stops the SageMaker JupyterLab App.
+6. applies `aws_worker.shutdown_on` and optionally stops the SageMaker JupyterLab App.
 
 Progress reflects native 4DAnyone stages, not an exact remaining-time estimate.
 
@@ -173,15 +173,15 @@ Shutdown uses SageMaker `DeleteApp`. It stops compute without deleting the Space
 
 ## Amazon SNS email
 
-The execution role must allow `sns:CreateTopic`, `sns:Subscribe`, and `sns:Publish`. Configure `aws_job.sns.topic_name` and `aws_job.sns.email`, then run:
+The execution role must allow `sns:CreateTopic`, `sns:Subscribe`, and `sns:Publish`. Configure `aws_worker.sns.topic_name` and `aws_worker.sns.email`, then run:
 
 ```bash
-fourda-aws-job configure-email --config config/run.json
+fourda-aws-worker configure-email --config config/run.json
 ```
 
 Confirm the AWS `Subscription Confirmation` email before relying on notifications. No second AWS configuration file is created; the run JSON remains the single source of truth.
 
-Automatic shutdown additionally requires `sagemaker:DeleteApp`. Domain ID, Space name, and App name are read from `aws_job.sagemaker` in the same JSON document.
+Automatic shutdown additionally requires `sagemaker:DeleteApp`. Domain ID, Space name, and App name are read from `aws_worker.sagemaker` in the same JSON document.
 
 ## Tests
 

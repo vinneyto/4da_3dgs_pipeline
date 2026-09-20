@@ -1,4 +1,4 @@
-"""Persistent AWS job launcher for a SageMaker JupyterLab Space."""
+"""Persistent job process managed by the AWS worker."""
 
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ class AwsBackgroundJob:
 
         log_handle = self.log_path.open("ab", buffering=0)
         process = subprocess.Popen(
-            [sys.executable, "-m", "fourda_aws_job.worker", "--job-dir", str(self.root)],
+            [sys.executable, "-m", "fourda_aws_worker.worker", "--job-dir", str(self.root)],
             stdin=subprocess.DEVNULL,
             stdout=log_handle,
             stderr=subprocess.STDOUT,

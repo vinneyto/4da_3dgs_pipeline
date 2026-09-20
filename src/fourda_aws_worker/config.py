@@ -1,4 +1,4 @@
-"""Configuration for the AWS-specific background job."""
+"""Configuration for the AWS-specific background worker."""
 
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ class SageMakerAppConfig:
 
 
 @dataclass(frozen=True, slots=True)
-class AwsJobConfig:
+class AwsWorkerConfig:
     job_id: str
     jobs_dir: Path
     shutdown_on: str
@@ -51,12 +51,12 @@ class AwsJobConfig:
     def __post_init__(self) -> None:
         object.__setattr__(self, "jobs_dir", Path(self.jobs_dir))
         if not self.jobs_dir.is_absolute():
-            raise ValueError(f"aws_job.jobs_dir must be absolute: {self.jobs_dir}")
+            raise ValueError(f"aws_worker.jobs_dir must be absolute: {self.jobs_dir}")
         if self.shutdown_on not in VALID_SHUTDOWN_POLICIES:
             raise ValueError(f"invalid shutdown policy: {self.shutdown_on}")
 
     @classmethod
-    def from_dict(cls, payload: dict[str, Any]) -> "AwsJobConfig":
+    def from_dict(cls, payload: dict[str, Any]) -> "AwsWorkerConfig":
         return cls(
             job_id=str(payload["job_id"]),
             jobs_dir=Path(payload["jobs_dir"]),
@@ -73,14 +73,14 @@ class AwsJobConfig:
         )
 
     @classmethod
-    def from_document(cls, document: dict[str, Any]) -> "AwsJobConfig":
+    def from_document(cls, document: dict[str, Any]) -> "AwsWorkerConfig":
         try:
-            payload = document["aws_job"]
+            payload = document["aws_worker"]
         except KeyError as error:
-            raise ValueError("config must contain an aws_job object") from error
+            raise ValueError("config must contain an aws_worker object") from error
         return cls.from_dict(payload)
 
 
-def load_aws_job_config(path: Path) -> tuple[FourDAnyoneConfig, AwsJobConfig]:
+def load_aws_worker_config(path: Path) -> tuple[FourDAnyoneConfig, AwsWorkerConfig]:
     document = load_document(path)
-    return FourDAnyoneConfig.from_dict(document["pipeline"]), AwsJobConfig.from_document(document)
+    return FourDAnyoneConfig.from_dict(document["pipeline"]), AwsWorkerConfig.from_document(document)

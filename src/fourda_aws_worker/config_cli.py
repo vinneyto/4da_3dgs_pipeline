@@ -50,8 +50,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     notifications = parser.add_argument_group("notifications")
-    notifications.add_argument("--sns-topic-name", required=True)
-    notifications.add_argument("--notification-email", required=True)
+    notifications.add_argument("--sns-topic-name")
+    notifications.add_argument("--notification-email")
+    notifications.add_argument("--telegram-chat-id")
+    notifications.add_argument(
+        "--telegram-bot-token-env",
+        default="CP_4DA_TELEGRAM_BOT_TOKEN",
+        help=(
+            "Environment variable containing the bot token "
+            "(the token is never written to JSON)"
+        ),
+    )
 
     sagemaker = parser.add_argument_group("SageMaker")
     sagemaker.add_argument("--sagemaker-domain-id", required=True)
@@ -82,6 +91,10 @@ def _resolve_bucket(s3_video_path: str, explicit_bucket: str | None) -> str:
 
 
 def build_document(args: argparse.Namespace) -> dict[str, Any]:
+    if bool(args.sns_topic_name) != bool(args.notification_email):
+        raise ValueError(
+            "--sns-topic-name and --notification-email must be provided together"
+        )
     bucket = _resolve_bucket(args.s3_video_path, args.bucket)
     job_id = args.job_id or args.experiment_name
     document: dict[str, Any] = {
@@ -111,8 +124,26 @@ def build_document(args: argparse.Namespace) -> dict[str, Any]:
             "sync_models": args.sync_models,
             "upload_results": args.upload_results,
             "shutdown_on": args.shutdown_on,
-            "sns_topic_name": args.sns_topic_name,
-            "notification_email": args.notification_email,
+            "notifications": {
+                "email": (
+                    {
+                        "enabled": True,
+                        "topic_name": args.sns_topic_name,
+                        "email": args.notification_email,
+                    }
+                    if args.notification_email
+                    else None
+                ),
+                "telegram": (
+                    {
+                        "enabled": True,
+                        "chat_id": args.telegram_chat_id,
+                        "bot_token_env": args.telegram_bot_token_env,
+                    }
+                    if args.telegram_chat_id
+                    else None
+                ),
+            },
             "sagemaker_domain_id": args.sagemaker_domain_id,
             "sagemaker_space_name": args.sagemaker_space_name,
             "sagemaker_app_name": args.sagemaker_app_name,

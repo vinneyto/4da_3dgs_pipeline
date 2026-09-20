@@ -38,8 +38,14 @@
     "sync_models": true,
     "upload_results": true,
     "shutdown_on": "never",
-    "sns_topic_name": "cp-4da-pipeline-REPLACE_WITH_DEPLOYMENT_ID",
-    "notification_email": "you@example.com",
+    "notifications": {
+      "email": null,
+      "telegram": {
+        "enabled": false,
+        "chat_id": "REPLACE_WITH_TELEGRAM_CHAT_ID",
+        "bot_token_env": "CP_4DA_TELEGRAM_BOT_TOKEN"
+      }
+    },
     "sagemaker_domain_id": "d-REPLACE_ME",
     "sagemaker_space_name": "cp-4da-jupyter-REPLACE_WITH_DEPLOYMENT_ID",
     "sagemaker_app_name": "default",

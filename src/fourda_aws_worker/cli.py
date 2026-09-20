@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import time
+from dataclasses import asdict
 from pathlib import Path
 
 from .aws import configure_email

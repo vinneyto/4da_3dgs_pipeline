@@ -89,14 +89,14 @@ def run_worker(job_dir: Path) -> int:
             state="running",
             stage="aws-health-check",
             progress=0.0,
-            message="Validating AWS identity, S3, SNS email, and SageMaker App",
+            message="Validating AWS identity, S3, optional notifications, and SageMaker App",
         )
         status.write(status_path)
         health = run_health_check(aws_worker_config, status.job_id)
         print(
             "AWS health check passed: "
             f"caller={health.caller_arn}, bucket={health.bucket}, "
-            f"topic={health.topic_arn}",
+            f"email={health.email_status}, telegram={health.telegram_status}",
             flush=True,
         )
         status.update(
@@ -126,8 +126,10 @@ def run_worker(job_dir: Path) -> int:
         )
 
         pipeline_config.validate_paths()
-        publish_started(aws_worker_config, health, pipeline_config.experiment_name)
-        print("SNS pipeline-start notification sent", flush=True)
+        notification_results = publish_started(
+            aws_worker_config, health, pipeline_config.experiment_name
+        )
+        print(f"Start notifications: {notification_results or 'disabled'}", flush=True)
 
         result = FourDAnyonePipeline(pipeline_config, on_progress=on_progress).run()
 
@@ -168,14 +170,14 @@ def run_worker(job_dir: Path) -> int:
         status.write(status_path)
 
     try:
-        publish_completion(
+        notification_results = publish_completion(
             aws_worker_config,
             f"4DAnyone AWS job {status.state}: {status.job_id}",
             _notification_text(status, aws_worker_config, result, input_s3_uri, result_s3_uri),
         )
-        print("SNS completion notification sent", flush=True)
+        print(f"Completion notifications: {notification_results or 'disabled'}", flush=True)
     except Exception:
-        print("SNS completion notification failed:", flush=True)
+        print("Completion notification dispatch failed:", flush=True)
         traceback.print_exc()
 
     should_stop = aws_worker_config.shutdown_on == "always" or (

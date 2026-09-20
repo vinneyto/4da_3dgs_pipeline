@@ -16,6 +16,7 @@
   "pipeline": {
     "experiment_name": "leo_one_layer_24views_01",
     "dataset": {
+      "enabled": true,
       "type": "4danyone",
       "config": {
         "views_per_layer": 24,
@@ -33,6 +34,18 @@
       "artifacts": {
         "rerun": {
           "enabled": true,
+          "view_count": 4,
+          "device": "auto"
+        }
+      }
+    },
+    "reconstruction": {
+      "enabled": false,
+      "type": "nerfstudio_splatfacto",
+      "config": {},
+      "artifacts": {
+        "rerun": {
+          "enabled": false,
           "view_count": 4,
           "device": "auto"
         }
@@ -62,9 +75,11 @@
         "resource_status_interval_seconds": null
       }
     },
-    "sagemaker_domain_id": "d-REPLACE_ME",
-    "sagemaker_space_name": "cp-4da-jupyter-REPLACE_WITH_DEPLOYMENT_ID",
-    "sagemaker_app_name": "default",
+    "sagemaker": {
+      "domain_id": "d-REPLACE_ME",
+      "space_name": "cp-4da-jupyter-REPLACE_WITH_DEPLOYMENT_ID",
+      "app_name": "default"
+    },
     "local": {
       "data_root": "/home/sagemaker-user/4danyone-data",
       "fourdanyone_root": "/home/sagemaker-user/work/4DAnyone"

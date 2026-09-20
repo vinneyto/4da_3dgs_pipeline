@@ -36,13 +36,29 @@ def test_generator_writes_a_valid_worker_document(tmp_path: Path) -> None:
     raw = json.loads(output.read_text())
     pipeline, worker = load_aws_worker_config(output)
     assert raw["schema_version"] == 4
+    assert raw["environment"]["python_version"] == "3.11"
+    assert raw["environment"]["torch_version"] == "2.8.0"
+    assert raw["pipeline"]["dataset"]["enabled"] is True
     assert raw["pipeline"]["dataset"]["type"] == "4danyone"
     assert raw["pipeline"]["dataset"]["config"]["layer_pitches"] == [0]
+    assert raw["pipeline"]["reconstruction"] == {
+        "enabled": False,
+        "type": "nerfstudio_splatfacto",
+        "config": {},
+        "artifacts": {
+            "rerun": {
+                "enabled": False,
+                "view_count": 4,
+                "device": "auto",
+            }
+        },
+    }
     assert pipeline.experiment_name == "leo_one_layer_24views_01"
     assert pipeline.num_views == 24
     assert pipeline.layer_pitches == (0,)
     assert worker.job_id == pipeline.experiment_name
     assert worker.bucket.name == "cp-4da-test"
+    assert raw["aws_worker"]["sagemaker"]["app_name"] == "default"
     assert raw["aws_worker"]["bucket"]["video"] == "leo.MOV"
     assert worker.local_video_path == Path("/home/sagemaker-user/4danyone-data/input/leo.MOV")
 

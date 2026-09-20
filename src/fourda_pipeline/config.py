@@ -28,6 +28,13 @@ def extract_4danyone_dataset_config(pipeline: dict[str, Any]) -> dict[str, Any]:
     stage = pipeline["dataset"]
     if not isinstance(stage, dict):
         raise TypeError("pipeline.dataset must be an object")
+    dataset_enabled = stage.get("enabled", True)
+    if not isinstance(dataset_enabled, bool):
+        raise TypeError("pipeline.dataset.enabled must be a boolean")
+    if not dataset_enabled:
+        raise ValueError(
+            "pipeline.dataset is disabled and no executable reconstruction stage exists yet"
+        )
     stage_type = stage.get("type")
     if stage_type != FOURDANYONE_DATASET_TYPE:
         raise ValueError(
@@ -59,10 +66,16 @@ def extract_4danyone_dataset_config(pipeline: dict[str, Any]) -> dict[str, Any]:
 
     reconstruction = pipeline.get("reconstruction")
     if reconstruction is not None:
-        raise ValueError(
-            "pipeline.reconstruction is configured, but 3DGS reconstruction "
-            "is not implemented yet"
-        )
+        if not isinstance(reconstruction, dict):
+            raise TypeError("pipeline.reconstruction must be an object")
+        reconstruction_enabled = reconstruction.get("enabled", True)
+        if not isinstance(reconstruction_enabled, bool):
+            raise TypeError("pipeline.reconstruction.enabled must be a boolean")
+        if reconstruction_enabled:
+            raise ValueError(
+                "pipeline.reconstruction is enabled, but 3DGS reconstruction "
+                "is not implemented yet"
+            )
     return values
 
 

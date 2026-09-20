@@ -86,3 +86,30 @@ def test_reconstruction_stage_is_not_silently_ignored() -> None:
                 },
             }
         )
+
+
+def test_disabled_reconstruction_stage_is_ignored_until_implemented() -> None:
+    payload = extract_4danyone_dataset_config(
+        {
+            "experiment_name": "leo",
+            "dataset": {"enabled": True, "type": "4danyone", "config": {}},
+            "reconstruction": {
+                "enabled": False,
+                "type": "nerfstudio_splatfacto",
+                "config": {"unknown_future_setting": True},
+            },
+        }
+    )
+
+    assert payload["experiment_name"] == "leo"
+
+
+def test_disabled_dataset_cannot_run_without_reconstruction() -> None:
+    with pytest.raises(ValueError, match="dataset is disabled"):
+        extract_4danyone_dataset_config(
+            {
+                "experiment_name": "leo",
+                "dataset": {"enabled": False, "type": "4danyone"},
+                "reconstruction": {"enabled": False},
+            }
+        )

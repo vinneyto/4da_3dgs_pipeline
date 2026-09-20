@@ -19,6 +19,46 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--force", action="store_true", help="Replace an existing output file")
 
+    environment = parser.add_argument_group("persistent execution environment")
+    environment.add_argument(
+        "--conda-bootstrap",
+        type=Path,
+        default=Path("/opt/conda/etc/profile.d/conda.sh"),
+    )
+    environment.add_argument(
+        "--conda-env",
+        type=Path,
+        default=Path("/home/sagemaker-user/.conda/envs/4danyone"),
+    )
+    environment.add_argument(
+        "--pipeline-repo-root",
+        type=Path,
+        default=Path("/home/sagemaker-user/work/4da_3dgs_pipeline"),
+    )
+    environment.add_argument(
+        "--fourdanyone-git-url",
+        default="https://github.com/ant-research/4DAnyone.git",
+    )
+    environment.add_argument(
+        "--fourdanyone-git-ref",
+        default="e38f210827f7b3effbe5b573ea07cfcf17e72dca",
+    )
+    environment.add_argument("--python-version", default="3.11")
+    environment.add_argument("--torch-version", default="2.8.0")
+    environment.add_argument("--torchvision-version", default="0.23.0")
+    environment.add_argument(
+        "--torch-index-url",
+        default="https://download.pytorch.org/whl/cu126",
+    )
+    environment.add_argument("--opencv-fallback-version", default="4.14.0.94")
+    environment.add_argument(
+        "--lock-file",
+        type=Path,
+        default=Path(
+            "/home/sagemaker-user/4danyone-data/environment/requirements-lock.txt"
+        ),
+    )
+
     pipeline = parser.add_argument_group("pipeline")
     pipeline.add_argument("--experiment-name", required=True)
     pipeline.add_argument("--job-id", help="Defaults to --experiment-name")
@@ -146,9 +186,23 @@ def build_document(args: argparse.Namespace) -> dict[str, Any]:
     job_id = args.job_id or args.experiment_name
     document: dict[str, Any] = {
         "schema_version": 4,
+        "environment": {
+            "conda_bootstrap": str(args.conda_bootstrap),
+            "conda_env": str(args.conda_env),
+            "pipeline_repo_root": str(args.pipeline_repo_root),
+            "fourdanyone_git_url": args.fourdanyone_git_url,
+            "fourdanyone_git_ref": args.fourdanyone_git_ref,
+            "python_version": args.python_version,
+            "torch_version": args.torch_version,
+            "torchvision_version": args.torchvision_version,
+            "torch_index_url": args.torch_index_url,
+            "opencv_fallback_version": args.opencv_fallback_version,
+            "lock_file": str(args.lock_file),
+        },
         "pipeline": {
             "experiment_name": args.experiment_name,
             "dataset": {
+                "enabled": True,
                 "type": "4danyone",
                 "config": {
                     "views_per_layer": args.views_per_layer,
@@ -168,6 +222,18 @@ def build_document(args: argparse.Namespace) -> dict[str, Any]:
                         "enabled": args.rerun,
                         "view_count": args.rerun_view_count,
                         "device": args.rerun_device,
+                    }
+                },
+            },
+            "reconstruction": {
+                "enabled": False,
+                "type": "nerfstudio_splatfacto",
+                "config": {},
+                "artifacts": {
+                    "rerun": {
+                        "enabled": False,
+                        "view_count": 4,
+                        "device": "auto",
                     }
                 },
             },
@@ -209,9 +275,11 @@ def build_document(args: argparse.Namespace) -> dict[str, Any]:
                     else None
                 ),
             },
-            "sagemaker_domain_id": args.sagemaker_domain_id,
-            "sagemaker_space_name": args.sagemaker_space_name,
-            "sagemaker_app_name": args.sagemaker_app_name,
+            "sagemaker": {
+                "domain_id": args.sagemaker_domain_id,
+                "space_name": args.sagemaker_space_name,
+                "app_name": args.sagemaker_app_name,
+            },
             "local": {
                 "data_root": str(args.data_root),
                 "fourdanyone_root": str(args.fourdanyone_root),

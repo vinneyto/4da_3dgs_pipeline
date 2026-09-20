@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -19,12 +20,12 @@ ProgressCallback = Callable[[ProgressUpdate], None]
 
 
 class FourDAnyonePipeline:
-    """Generate multi-view video and export synchronized static 3DGS datasets.
+    """Run 4DAnyone and independently requested downstream artifacts.
 
     The default camera layout mirrors the validated Colab experiment:
     24 yaw views at pitches -15, 0 and 15 degrees (72 cameras total), a full
-    360-degree orbit, 30 FPS and seed 42. By default only frame 60 is exported
-    to a static Nerfstudio dataset to keep disk use bounded.
+    360-degree orbit, 30 FPS and seed 42. The default Nerfstudio artifact exports
+    only frame 60 to keep disk use bounded.
     """
 
     def __init__(
@@ -68,7 +69,7 @@ class FourDAnyonePipeline:
             sys.executable,
             str(config.fourdanyone_root / "scripts/export_nerfstudio.py"),
             "--data_dir",
-            str(config.inference_dir),
+            str(config.nerfstudio_generation_dir),
             "--output_dir",
             str(config.dataset_dir(frame_index)),
             "--frame_index",
@@ -76,7 +77,7 @@ class FourDAnyonePipeline:
             "--model_dir",
             str(config.model_dir),
             "--device",
-            config.export_device,
+            config.nerfstudio.device,
         ]
 
     def _handle_inference_line(self, line: str) -> None:
@@ -116,17 +117,22 @@ class FourDAnyonePipeline:
     def _export_datasets(self) -> list[dict[str, Any]]:
         config = self.config
         results: list[dict[str, Any]] = []
-        count = len(config.frame_indices)
-        for offset, frame_index in enumerate(config.frame_indices):
+        count = len(config.nerfstudio.frame_indices)
+        for offset, frame_index in enumerate(config.nerfstudio.frame_indices):
             destination = config.dataset_dir(frame_index)
             transforms = destination / "transforms.json"
             if config.resume and transforms.is_file():
                 message = f"Reusing exported frame {frame_index}"
             else:
                 if destination.exists():
-                    raise FileExistsError(
-                        f"dataset output already exists: {destination}; use --resume to reuse it"
-                    )
+                    if config.nerfstudio.replace_existing:
+                        shutil.rmtree(destination)
+                    else:
+                        raise FileExistsError(
+                            f"dataset output already exists: {destination}; set "
+                            "artifacts.dataset.nerfstudio.replace_existing=true "
+                            "to replace it"
+                        )
                 self.runner.run(
                     self.build_export_command(frame_index),
                     cwd=config.fourdanyone_root,
@@ -185,10 +191,13 @@ class FourDAnyonePipeline:
         started = datetime.now(UTC)
         if self.config.dataset_enabled:
             self._run_inference()
+        else:
+            self._progress("dataset", 0.80, "4DAnyone dataset stage disabled")
+        if self.config.nerfstudio.enabled:
             datasets = self._export_datasets()
         else:
             datasets = []
-            self._progress("dataset", 0.80, "Dataset stage disabled")
+            self._progress("export", 0.90, "Nerfstudio artifact disabled")
         rerun_file = self._export_rerun()
         finished = datetime.now(UTC)
 

@@ -8,6 +8,7 @@ import os
 import traceback
 from pathlib import Path
 
+from fourda_pipeline.config import FourDAnyoneConfig
 from fourda_pipeline.pipeline import FourDAnyonePipeline
 from fourda_pipeline.progress import ProgressUpdate
 
@@ -25,6 +26,30 @@ from .aws import (
 from .config import AwsWorkerConfig, materialize_pipeline_config
 from .monitoring import TelegramRuntimeMonitoring
 from .status import JobStatus, utc_now
+
+
+def required_source_experiments(
+    pipeline_config: FourDAnyoneConfig,
+) -> dict[str, Path]:
+    """Return prior runs that must be restored before artifact-only work."""
+    sources: dict[str, Path] = {}
+    if pipeline_config.nerfstudio.enabled and not (
+        pipeline_config.dataset_enabled
+        and pipeline_config.nerfstudio_source_experiment_name
+        == pipeline_config.experiment_name
+    ):
+        sources[
+            pipeline_config.nerfstudio_source_experiment_name
+        ] = pipeline_config.nerfstudio_source_experiment_dir
+    if pipeline_config.rerun.enabled and not (
+        pipeline_config.dataset_enabled
+        and pipeline_config.rerun_source_experiment_name
+        == pipeline_config.experiment_name
+    ):
+        sources[
+            pipeline_config.rerun_source_experiment_name
+        ] = pipeline_config.rerun_source_experiment_dir
+    return sources
 
 
 def _notification_text(
@@ -143,27 +168,29 @@ def run_worker(job_dir: Path) -> int:
             flush=True,
         )
 
-        if (
-            pipeline_config.rerun.enabled
-            and not all(
-                (pipeline_config.rerun_generation_dir / filename).is_file()
+        for source_experiment_name, source_experiment_dir in required_source_experiments(
+            pipeline_config
+        ).items():
+            generation_dir = source_experiment_dir / "4danyone"
+            if all(
+                (generation_dir / filename).is_file()
                 for filename in ("metadata.json", "cameras.json")
-            )
-        ):
+            ):
+                continue
             status.update(
                 state="running",
                 stage="source-sync",
                 progress=0.08,
                 message=(
                     "Restoring source experiment "
-                    f"{pipeline_config.rerun_source_experiment_name} from S3"
+                    f"{source_experiment_name} from S3"
                 ),
             )
             status.write(status_path)
             source_count, source_downloaded = sync_experiment_results(
                 aws_worker_config,
-                pipeline_config.rerun_source_experiment_name,
-                pipeline_config.rerun_source_experiment_dir,
+                source_experiment_name,
+                source_experiment_dir,
             )
             print(
                 f"Source experiment ready: {source_count} S3 objects, "

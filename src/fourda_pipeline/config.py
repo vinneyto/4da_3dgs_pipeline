@@ -7,13 +7,39 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from fourda_nerfstudio.config import NerfstudioArtifactConfig
 from fourda_rerun.config import RerunConfig
 
 
 DEFAULT_LAYER_PITCHES = (-15, 0, 15)
-DEFAULT_FRAME_INDICES = (60,)
-SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5})
+SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5, 6})
 FOURDANYONE_DATASET_TYPE = "4danyone"
+
+
+def _migrate_legacy_nerfstudio_artifact(
+    values: dict[str, Any],
+    payload: Any = None,
+    *,
+    default_enabled: bool = False,
+) -> Any:
+    """Move pre-v6 export settings out of the 4DAnyone stage."""
+    legacy: dict[str, Any] = {}
+    if "frame" in values:
+        if "frame_indices" in values:
+            raise ValueError("pipeline must use either frame or frame_indices, not both")
+        legacy["frame_indices"] = [values.pop("frame")]
+    elif "frame_indices" in values:
+        legacy["frame_indices"] = values.pop("frame_indices")
+    if "export_device" in values:
+        legacy["device"] = values.pop("export_device")
+    if payload is not None and legacy:
+        raise ValueError(
+            "configure Nerfstudio export in artifacts.dataset.nerfstudio, "
+            "not pipeline.dataset.config"
+        )
+    if payload is not None:
+        return payload
+    return {"enabled": bool(legacy) or default_enabled, **legacy}
 
 
 def extract_4danyone_dataset_config(
@@ -24,11 +50,17 @@ def extract_4danyone_dataset_config(
 ) -> dict[str, Any]:
     """Return the concrete dataset configuration from a pipeline document.
 
-    Schema v5 models the pipeline as typed stages and artifacts as independent
+    Schema v6 models the pipeline as typed stages and artifacts as independent
     root tasks. Earlier schemas stored both directly in the pipeline object.
     """
     if "dataset" not in pipeline:
-        return dict(pipeline)
+        values = dict(pipeline)
+        # Flat pre-v4 configurations always ran the static export.
+        values["nerfstudio"] = _migrate_legacy_nerfstudio_artifact(
+            values,
+            default_enabled=True,
+        )
+        return values
 
     stage = pipeline["dataset"]
     if not isinstance(stage, dict):
@@ -66,11 +98,16 @@ def extract_4danyone_dataset_config(
     if not isinstance(dataset_artifacts, dict):
         raise TypeError("artifacts.dataset must be an object")
     rerun_payload = dataset_artifacts.get("rerun", stage_artifacts.get("rerun"))
+    nerfstudio_payload = _migrate_legacy_nerfstudio_artifact(
+        values,
+        dataset_artifacts.get("nerfstudio"),
+    )
     if "rerun" in values and rerun_payload is not None:
         raise ValueError(
             "configure Rerun in root artifacts, not dataset.config"
         )
     values["dataset_enabled"] = dataset_enabled
+    values["nerfstudio"] = nerfstudio_payload
     values["rerun"] = rerun_payload
 
     reconstruction = pipeline.get("reconstruction")
@@ -97,7 +134,10 @@ def extract_4danyone_dataset_config(
             "artifacts are not implemented yet"
         )
     rerun_enabled = RerunConfig.from_dict(rerun_payload).enabled
-    if not dataset_enabled and not rerun_enabled:
+    nerfstudio_enabled = NerfstudioArtifactConfig.from_dict(
+        nerfstudio_payload
+    ).enabled
+    if not dataset_enabled and not nerfstudio_enabled and not rerun_enabled:
         raise ValueError("no pipeline stage or artifact is enabled")
     return values
 
@@ -137,10 +177,9 @@ class FourDAnyoneConfig:
     seed: int = 42
     enable_turbo: bool = True
     attention_backend: str = "auto"
-    frame_indices: tuple[int, ...] = DEFAULT_FRAME_INDICES
-    export_device: str = "cuda:0"
     resume: bool = False
     dataset_enabled: bool = True
+    nerfstudio: NerfstudioArtifactConfig = NerfstudioArtifactConfig()
     rerun: RerunConfig = RerunConfig()
 
     def __post_init__(self) -> None:
@@ -149,7 +188,12 @@ class FourDAnyoneConfig:
         object.__setattr__(self, "model_dir", Path(self.model_dir))
         object.__setattr__(self, "runs_dir", Path(self.runs_dir))
         object.__setattr__(self, "layer_pitches", tuple(int(value) for value in self.layer_pitches))
-        object.__setattr__(self, "frame_indices", tuple(int(value) for value in self.frame_indices))
+        if isinstance(self.nerfstudio, (dict, bool)):
+            object.__setattr__(
+                self,
+                "nerfstudio",
+                NerfstudioArtifactConfig.from_dict(self.nerfstudio),
+            )
         if isinstance(self.rerun, dict):
             object.__setattr__(self, "rerun", RerunConfig.from_dict(self.rerun))
         self.validate_values()
@@ -169,6 +213,18 @@ class FourDAnyoneConfig:
     @property
     def datasets_dir(self) -> Path:
         return self.experiment_dir / "nerfstudio"
+
+    @property
+    def nerfstudio_source_experiment_name(self) -> str:
+        return self.nerfstudio.source_experiment_name or self.experiment_name
+
+    @property
+    def nerfstudio_source_experiment_dir(self) -> Path:
+        return self.runs_dir / self.nerfstudio_source_experiment_name
+
+    @property
+    def nerfstudio_generation_dir(self) -> Path:
+        return self.nerfstudio_source_experiment_dir / "4danyone"
 
     @property
     def rerun_dir(self) -> Path:
@@ -217,13 +273,6 @@ class FourDAnyoneConfig:
             raise ValueError("yaw_span must be between 1 and 360")
         if self.target_fps <= 0:
             raise ValueError("target_fps must be positive")
-        if not self.frame_indices:
-            raise ValueError("at least one frame index is required")
-        if any(index < 0 or index > 120 for index in self.frame_indices):
-            raise ValueError("frame indices must be in the inclusive range 0..120")
-        if len(set(self.frame_indices)) != len(self.frame_indices):
-            raise ValueError("frame indices must be unique")
-
     def validate_paths(self) -> None:
         required = [
             (self.fourdanyone_root / "third_party/GVHMR/hmr4d/__init__.py", "GVHMR submodule"),
@@ -233,19 +282,42 @@ class FourDAnyoneConfig:
                 [
                     (self.video_path, "input video"),
                     (self.fourdanyone_root / "inference.py", "4DAnyone inference.py"),
-                    (
-                        self.fourdanyone_root / "scripts/export_nerfstudio.py",
-                        "Nerfstudio exporter",
-                    ),
                 ]
             )
+        if self.nerfstudio.enabled:
+            required.append(
+                (
+                    self.fourdanyone_root / "scripts/export_nerfstudio.py",
+                    "Nerfstudio exporter",
+                )
+            )
+            if not (
+                self.dataset_enabled
+                and self.nerfstudio_source_experiment_name == self.experiment_name
+            ):
+                required.extend(
+                    [
+                        (
+                            self.nerfstudio_generation_dir / "metadata.json",
+                            "Nerfstudio source metadata",
+                        ),
+                        (
+                            self.nerfstudio_generation_dir / "cameras.json",
+                            "Nerfstudio source cameras",
+                        ),
+                    ]
+                )
         if self.rerun.enabled:
-            required.extend(
-                [
-                    (self.rerun_generation_dir / "metadata.json", "Rerun source metadata"),
-                    (self.rerun_generation_dir / "cameras.json", "Rerun source cameras"),
-                ]
-            )
+            if not (
+                self.dataset_enabled
+                and self.rerun_source_experiment_name == self.experiment_name
+            ):
+                required.extend(
+                    [
+                        (self.rerun_generation_dir / "metadata.json", "Rerun source metadata"),
+                        (self.rerun_generation_dir / "cameras.json", "Rerun source cameras"),
+                    ]
+                )
         missing = [f"{label}: {path}" for path, label in required if not path.is_file()]
         if missing:
             raise FileNotFoundError("Missing required paths:\n" + "\n".join(f" - {item}" for item in missing))
@@ -257,12 +329,14 @@ class FourDAnyoneConfig:
         for key in ("video_path", "fourdanyone_root", "model_dir", "runs_dir"):
             payload[key] = str(payload[key])
         payload["layer_pitches"] = list(self.layer_pitches)
-        payload["frame_indices"] = list(self.frame_indices)
         return payload
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "FourDAnyoneConfig":
         values = dict(payload)
+        values["nerfstudio"] = NerfstudioArtifactConfig.from_dict(
+            values.get("nerfstudio")
+        )
         values["rerun"] = RerunConfig.from_dict(values.get("rerun"))
         return cls(**values)
 

@@ -8,7 +8,7 @@ The repository deliberately separates the local pipeline from AWS orchestration.
 
 | Component | Responsibility | AWS dependency |
 |---|---|---|
-| `FourDAnyonePipeline` | 4DAnyone inference and local Nerfstudio/3DGS export | None |
+| `FourDAnyonePipeline` | 4DAnyone inference plus independently enabled local artifacts | None |
 | `fourda-pipeline` | Blocking local CLI around `FourDAnyonePipeline` | None |
 | `fourda-aws-worker` | AWS-specific detached execution, durable job status, S3 staging/result upload, optional email/Telegram notifications, SageMaker App shutdown | Optional `[aws]` extra |
 
@@ -18,6 +18,8 @@ The source tree mirrors this boundary:
 
 ```text
 src/fourda_pipeline/   # cloud-independent pipeline and blocking CLI
+src/fourda_nerfstudio/ # static synchronized-frame artifact configuration
+src/fourda_rerun/      # interactive recording artifact
 src/fourda_aws_worker/ # AWS worker, background jobs, S3, SNS, and SageMaker
 ```
 
@@ -34,12 +36,13 @@ cp config/run.example.json config/run.json
 Edit `config/run.json` before running anything. It has four sections:
 
 - `environment`: installation paths and pinned dependency versions used by setup scripts;
-- `pipeline`: cloud-independent camera, inference, and export parameters;
+- `pipeline`: cloud-independent processing stages;
+- `artifacts`: independently enabled Nerfstudio and Rerun outputs;
 - `aws_worker`: S3 input, local persistent roots, background job identity, shutdown policy, output upload, SNS, and SageMaker App identity.
 
 For an AWS run, `pipeline` deliberately contains no filesystem paths. The worker derives
-`video_path`, `model_dir`, `runs_dir`, and `fourdanyone_root` from `aws_worker.s3_video_path`
-and `aws_worker.local`, downloads the required S3 data, and constructs the complete
+`video_path` from `aws_worker.bucket` and the remaining local paths from `aws_worker.local`,
+downloads the required S3 data, and constructs the complete
 `FourDAnyoneConfig` immediately before execution.
 
 The AWS example is not directly accepted by `fourda-pipeline`, because that blocking,
@@ -61,7 +64,7 @@ The checked-in [`config/run.example.json`](config/run.example.json) reproduces t
 | `target_fps` | 30 |
 | `seed` | 42 |
 | Model | turbo |
-| Exported frame | 60 |
+| Nerfstudio artifact frames | `[60]` |
 
 `RERUN_VIEW_COUNT=4` from the Colab notebook belongs to downstream visualization. It is not a 4DAnyone inference or export parameter.
 
@@ -133,7 +136,8 @@ fourda-pipeline --config config/local-run.json
 ```
 
 `config/local-run.json` must contain the complete local paths described above. This command
-performs no AWS operations. It writes the selected synchronized moment to:
+performs no AWS operations. With `artifacts.dataset.nerfstudio.enabled=true`, it writes
+each selected synchronized moment to:
 
 ```text
 <pipeline.runs_dir>/<pipeline.experiment_name>/nerfstudio/frame_060/
@@ -143,7 +147,9 @@ performs no AWS operations. It writes the selected synchronized moment to:
 └── masks/
 ```
 
-Set `pipeline.resume` to `true` to reuse successfully completed intermediate outputs. When it is `false`, existing output directories are protected against accidental overwrite.
+Set `pipeline.dataset.config.resume` to `true` to reuse completed 4DAnyone inference.
+Nerfstudio export is controlled separately by `artifacts.dataset.nerfstudio`; set
+`replace_existing=true` only when an existing static dataset should be rebuilt.
 
 ## Generate an AWS run document
 
@@ -160,7 +166,7 @@ fourda-worker-config \
   --s3-video-path s3://cp-4da-d9f856354df8/input/leo.MOV \
   --views-per-layer 24 \
   --layer-pitches 0 \
-  --frame 60 \
+  --nerfstudio-frame-indices 60 \
   --telegram-chat-id YOUR_TELEGRAM_CHAT_ID \
   --telegram-bot-token-env CP_4DA_TELEGRAM_BOT_TOKEN \
   --sagemaker-domain-id d-x1ij0jwvo44o \
@@ -170,7 +176,7 @@ python -m json.tool config/run.json
 ```
 
 The bucket is inferred from a full `s3://` video URI. `job_id` defaults to the experiment
-name, while region, persistent SageMaker paths, S3 prefixes, frame, FPS, seed, turbo mode,
+name, while region, persistent SageMaker paths, S3 prefixes, artifact frames, FPS, seed, turbo mode,
 and shutdown policy have the defaults shown by `fourda-worker-config --help`. Pass
 `--force` to intentionally replace an existing document.
 
@@ -179,6 +185,27 @@ For a later three-layer run, choose a new experiment name and pass:
 ```bash
 --layer-pitches -15 0 15
 ```
+
+Nerfstudio export is not part of the expensive 4DAnyone stage. To create new
+temporal slices from a completed experiment without rerunning inference:
+
+```bash
+fourda-worker-config \
+  --output config/export-more-frames.json \
+  --experiment-name leo_static_exports_v2 \
+  --no-dataset \
+  --nerfstudio \
+  --nerfstudio-source-experiment-name leo_three_layers_72views_01 \
+  --nerfstudio-frame-indices 30 60 90 \
+  --nerfstudio-device cpu \
+  --bucket cp-4da-d9f856354df8 \
+  --video leo.MOV \
+  --sagemaker-domain-id d-x1ij0jwvo44o \
+  --sagemaker-space-name cp-4da-jupyter-d9f856354df8
+```
+
+The AWS worker restores the source experiment from S3 only when it is absent from
+the persistent volume. Rerun and Nerfstudio artifacts can share that restored source.
 
 ## AWS-aware background job
 
@@ -201,15 +228,16 @@ fourda-aws-worker stop --config config/run.json
 The job layer:
 
 1. runs a fail-closed AWS health check before expensive GPU work;
-2. downloads `aws_worker.s3_video_path` into `<data_root>/input/`, reusing a matching local file;
+2. downloads the configured bucket video into `<data_root>/input/` when the dataset stage is enabled, reusing a matching local file;
 3. synchronizes S3 model objects into `<data_root>/models/`, reusing the persistent cache;
-4. derives the full local pipeline configuration and validates its paths;
-5. sends optional email and/or Telegram `job started` notifications after staging succeeds;
-6. starts the AWS-independent core pipeline;
-7. records stage-based progress in `<data_root>/jobs/<job_id>/status.json`;
-8. uploads the completed experiment to `s3://<bucket>/<runs_prefix>/<experiment_name>/` when `aws_worker.upload_results` is `true`;
-9. sends optional email and/or Telegram success or failure notifications;
-10. applies `aws_worker.shutdown_on` and optionally stops the SageMaker JupyterLab App.
+4. restores any prior source experiment required by artifact-only work;
+5. derives the full local pipeline configuration and validates its paths;
+6. sends optional email and/or Telegram `job started` notifications after staging succeeds;
+7. starts the AWS-independent core pipeline;
+8. records stage-based progress in `<data_root>/jobs/<job_id>/status.json`;
+9. uploads the completed experiment to `s3://<bucket>/<runs_prefix>/<experiment_name>/` when `aws_worker.upload_results` is `true`;
+10. sends optional email and/or Telegram success or failure notifications;
+11. applies `aws_worker.shutdown_on` and optionally stops the SageMaker JupyterLab App.
 
 The startup health check validates the current STS identity, bucket access, the exact S3
 video object, model-prefix listing, result-prefix `PutObject`, optional notification channels,

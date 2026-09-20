@@ -13,7 +13,7 @@ from fourda_pipeline.config import FourDAnyoneConfig, extract_4danyone_dataset_c
 
 
 VALID_SHUTDOWN_POLICIES = frozenset({"never", "success", "always"})
-SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5})
+SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5, 6})
 
 
 def load_document(path: Path) -> dict[str, Any]:
@@ -296,10 +296,6 @@ def materialize_pipeline_config(
         experiment_name=document.get("experiment_name"),
         artifacts=document.get("artifacts"),
     )
-    if "frame" in payload:
-        if "frame_indices" in payload:
-            raise ValueError("pipeline must use either frame or frame_indices, not both")
-        payload["frame_indices"] = [payload.pop("frame")]
     if "turbo" in payload:
         if "enable_turbo" in payload:
             raise ValueError("pipeline must use either turbo or enable_turbo, not both")

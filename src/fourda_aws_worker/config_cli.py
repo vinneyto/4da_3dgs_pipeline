@@ -14,7 +14,7 @@ from .config import AwsWorkerConfig, materialize_pipeline_config
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="fourda-worker-config",
-        description="Generate a validated schema-v5 JSON document for fourda-aws-worker.",
+        description="Generate a validated schema-v6 JSON document for fourda-aws-worker.",
     )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--force", action="store_true", help="Replace an existing output file")
@@ -74,11 +74,34 @@ def build_parser() -> argparse.ArgumentParser:
     pipeline.add_argument("--yaw-span", type=int, default=360)
     pipeline.add_argument("--target-fps", type=float, default=30.0)
     pipeline.add_argument("--seed", type=int, default=42)
-    pipeline.add_argument("--frame", type=int, default=60)
     pipeline.add_argument("--turbo", action=argparse.BooleanOptionalAction, default=True)
     pipeline.add_argument("--attention-backend", default="auto")
-    pipeline.add_argument("--export-device", default="cuda:0")
     pipeline.add_argument("--resume", action=argparse.BooleanOptionalAction, default=False)
+
+    nerfstudio = parser.add_argument_group("Nerfstudio dataset artifact")
+    nerfstudio.add_argument(
+        "--nerfstudio",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Export synchronized static datasets from the completed 4DAnyone run",
+    )
+    nerfstudio.add_argument(
+        "--nerfstudio-frame-indices",
+        type=int,
+        nargs="+",
+        default=[60],
+    )
+    nerfstudio.add_argument("--nerfstudio-device", default="cuda:0")
+    nerfstudio.add_argument("--nerfstudio-source-experiment-name")
+    nerfstudio.add_argument(
+        "--nerfstudio-replace-existing",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+    )
+    # Preserve commands generated before schema v6 while keeping the new JSON
+    # vocabulary focused on artifacts.
+    nerfstudio.add_argument("--frame", type=int, help=argparse.SUPPRESS)
+    nerfstudio.add_argument("--export-device", help=argparse.SUPPRESS)
     pipeline.add_argument(
         "--rerun",
         action=argparse.BooleanOptionalAction,
@@ -200,7 +223,7 @@ def build_document(args: argparse.Namespace) -> dict[str, Any]:
     bucket, video = _resolve_video(args)
     job_id = args.job_id or args.experiment_name
     document: dict[str, Any] = {
-        "schema_version": 5,
+        "schema_version": 6,
         "environment": {
             "conda_bootstrap": str(args.conda_bootstrap),
             "conda_env": str(args.conda_env),
@@ -228,8 +251,6 @@ def build_document(args: argparse.Namespace) -> dict[str, Any]:
                     "seed": args.seed,
                     "turbo": args.turbo,
                     "attention_backend": args.attention_backend,
-                    "frame": args.frame,
-                    "export_device": args.export_device,
                     "resume": args.resume,
                 },
             },
@@ -241,6 +262,20 @@ def build_document(args: argparse.Namespace) -> dict[str, Any]:
         },
         "artifacts": {
             "dataset": {
+                "nerfstudio": {
+                    "enabled": args.nerfstudio,
+                    "source_experiment_name": (
+                        args.nerfstudio_source_experiment_name
+                        or args.experiment_name
+                    ),
+                    "frame_indices": (
+                        [args.frame]
+                        if args.frame is not None
+                        else args.nerfstudio_frame_indices
+                    ),
+                    "device": args.export_device or args.nerfstudio_device,
+                    "replace_existing": args.nerfstudio_replace_existing,
+                },
                 "rerun": {
                     "enabled": args.rerun,
                     "source_experiment_name": (
@@ -343,6 +378,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     print(f"Input: s3://{bucket_config['name']}/{video_key}")
     print(f"Target views: {total_views}")
     print(f"Dataset stage: {'enabled' if args.dataset else 'disabled'}")
+    print(f"Nerfstudio artifact: {'enabled' if args.nerfstudio else 'disabled'}")
     print(f"Dataset Rerun artifact: {'enabled' if args.rerun else 'disabled'}")
 
 

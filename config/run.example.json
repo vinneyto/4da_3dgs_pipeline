@@ -1,5 +1,5 @@
 {
-  "schema_version": 5,
+  "schema_version": 6,
   "environment": {
     "conda_bootstrap": "/opt/conda/etc/profile.d/conda.sh",
     "conda_env": "/home/sagemaker-user/.conda/envs/4danyone",
@@ -27,8 +27,6 @@
         "seed": 42,
         "turbo": true,
         "attention_backend": "auto",
-        "frame": 60,
-        "export_device": "cuda:0",
         "resume": false
       }
     },
@@ -40,6 +38,13 @@
   },
   "artifacts": {
     "dataset": {
+      "nerfstudio": {
+        "enabled": true,
+        "source_experiment_name": "leo_one_layer_24views_01",
+        "frame_indices": [60],
+        "device": "cuda:0",
+        "replace_existing": false
+      },
       "rerun": {
         "enabled": true,
         "source_experiment_name": "leo_one_layer_24views_01",

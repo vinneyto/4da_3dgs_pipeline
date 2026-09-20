@@ -54,6 +54,15 @@ def build_parser() -> argparse.ArgumentParser:
     notifications.add_argument("--notification-email")
     notifications.add_argument("--telegram-chat-id")
     notifications.add_argument(
+        "--telegram-stream-logs",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+    )
+    notifications.add_argument(
+        "--telegram-resource-status-interval-seconds",
+        type=int,
+    )
+    notifications.add_argument(
         "--telegram-bot-token-env",
         default="CP_4DA_TELEGRAM_BOT_TOKEN",
         help=(
@@ -94,6 +103,13 @@ def build_document(args: argparse.Namespace) -> dict[str, Any]:
     if bool(args.sns_topic_name) != bool(args.notification_email):
         raise ValueError(
             "--sns-topic-name and --notification-email must be provided together"
+        )
+    if (
+        args.telegram_stream_logs
+        or args.telegram_resource_status_interval_seconds is not None
+    ) and not args.telegram_chat_id:
+        raise ValueError(
+            "Telegram log/resource options require --telegram-chat-id"
         )
     bucket = _resolve_bucket(args.s3_video_path, args.bucket)
     job_id = args.job_id or args.experiment_name
@@ -139,6 +155,10 @@ def build_document(args: argparse.Namespace) -> dict[str, Any]:
                         "enabled": True,
                         "chat_id": args.telegram_chat_id,
                         "bot_token_env": args.telegram_bot_token_env,
+                        "stream_logs": args.telegram_stream_logs,
+                        "resource_status_interval_seconds": (
+                            args.telegram_resource_status_interval_seconds
+                        ),
                     }
                     if args.telegram_chat_id
                     else None

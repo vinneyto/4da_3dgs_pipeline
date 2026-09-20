@@ -3,9 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
-import re
-import subprocess
 import sys
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -46,7 +43,6 @@ class FourDAnyonePipeline:
 
     def _inference_request(self) -> dict[str, Any]:
         config = self.config
-        assert config.model_dir is not None
         return {
             "fourdanyone_root": str(config.fourdanyone_root.resolve()),
             "video_path": str(config.video_path.resolve()),
@@ -68,7 +64,6 @@ class FourDAnyonePipeline:
 
     def build_export_command(self, frame_index: int) -> list[str]:
         config = self.config
-        assert config.model_dir is not None
         return [
             sys.executable,
             str(config.fourdanyone_root / "scripts/export_nerfstudio.py"),
@@ -144,35 +139,6 @@ class FourDAnyonePipeline:
             results.append({"frame_index": frame_index, "dataset_dir": str(destination)})
         return results
 
-    @staticmethod
-    def _normalize_s3_uri(uri: str) -> str:
-        if not re.fullmatch(r"s3://[^/]+(?:/.+)?/?", uri):
-            raise ValueError(f"invalid S3 output URI: {uri}")
-        return uri.rstrip("/") + "/"
-
-    def _upload(self) -> None:
-        uri = self.config.s3_output_uri
-        if not uri:
-            self._progress("upload", 0.99, "S3 upload disabled")
-            return
-        uri = self._normalize_s3_uri(uri)
-        region = os.environ.get("CP_AWS_REGION", "us-east-1")
-        self._progress("upload", 0.96, f"Uploading experiment to {uri}")
-        subprocess.run(
-            [
-                "aws",
-                "s3",
-                "sync",
-                str(self.config.experiment_dir) + "/",
-                uri,
-                "--region",
-                region,
-                "--no-cli-pager",
-            ],
-            check=True,
-        )
-        self._progress("upload", 0.99, f"Uploaded experiment to {uri}")
-
     def run(self) -> dict[str, Any]:
         self._progress("validation", 0.01, "Validating pipeline configuration")
         self.config.validate_paths()
@@ -183,7 +149,6 @@ class FourDAnyonePipeline:
         started = datetime.now(UTC)
         self._run_inference()
         datasets = self._export_datasets()
-        self._upload()
         finished = datetime.now(UTC)
 
         result = {
@@ -195,7 +160,6 @@ class FourDAnyonePipeline:
             "started_at": started.isoformat(),
             "finished_at": finished.isoformat(),
             "elapsed_seconds": (finished - started).total_seconds(),
-            "s3_output_uri": self.config.s3_output_uri,
         }
         result_path = self.config.experiment_dir / "pipeline-result.json"
         result_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")

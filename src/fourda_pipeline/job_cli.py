@@ -1,16 +1,16 @@
-"""Manage detached 4DAnyone jobs inside a SageMaker JupyterLab App."""
+"""Manage detached 4DAnyone jobs and their AWS integrations."""
 
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import time
 from dataclasses import asdict
+from pathlib import Path
 
 from .aws_integration import configure_email
-from .cli_common import add_pipeline_arguments, config_from_args
 from .job import BackgroundJob
+from .job_config import JobConfig, load_document, load_job_config
 from .status import JobStatus
 
 
@@ -51,60 +51,58 @@ def _logs(job: BackgroundJob, lines: int, follow: bool) -> None:
             time.sleep(1)
 
 
+def _job_from_config(path: Path) -> tuple[BackgroundJob, JobConfig]:
+    document = load_document(path)
+    job_config = JobConfig.from_document(document)
+    return BackgroundJob(job_config.job_id, job_config.jobs_dir), job_config
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="fourda-job")
     commands = parser.add_subparsers(dest="command", required=True)
 
-    email = commands.add_parser("configure-email", help="Create SNS topic and email subscription")
-    email.add_argument("--email", required=True)
-    default_id = os.environ.get("CP_DEPLOYMENT_ID", "default")
-    email.add_argument("--topic-name", default=f"cp-4da-pipeline-{default_id}")
-    email.add_argument("--region", default=os.environ.get("CP_AWS_REGION", "us-east-1"))
-
-    start = commands.add_parser("start", help="Start a detached background job")
-    add_pipeline_arguments(start)
-    start.add_argument("--job-id", help="Defaults to experiment name")
-    start.add_argument("--shutdown-on", choices=("never", "success", "always"), default="never")
-    start.add_argument("--sns-topic-arn")
-
-    status = commands.add_parser("status", help="Show durable job state")
-    status.add_argument("job_id")
-    status.add_argument("--json", action="store_true")
-
-    logs = commands.add_parser("logs", help="Show or follow job output")
-    logs.add_argument("job_id")
-    logs.add_argument("--lines", type=int, default=100)
-    logs.add_argument("--follow", action="store_true")
-
-    stop = commands.add_parser("stop", help="Send SIGTERM to the worker process group")
-    stop.add_argument("job_id")
+    for name, help_text in (
+        ("configure-email", "Create the configured SNS topic and email subscription"),
+        ("start", "Start a detached background job"),
+        ("status", "Show durable job state"),
+        ("logs", "Show or follow job output"),
+        ("stop", "Send SIGTERM to the worker process group"),
+    ):
+        command = commands.add_parser(name, help=help_text)
+        command.add_argument("--config", type=Path, required=True)
+        if name == "status":
+            command.add_argument("--json", action="store_true")
+        if name == "logs":
+            command.add_argument("--lines", type=int, default=100)
+            command.add_argument("--follow", action="store_true")
     return parser
 
 
 def main() -> None:
     args = build_parser().parse_args()
     if args.command == "configure-email":
-        result = configure_email(args.email, args.topic_name, args.region)
+        _, job_config = _job_from_config(args.config)
+        result = configure_email(job_config.aws)
         print(json.dumps(result, indent=2, sort_keys=True))
         print("Confirm the AWS Subscription Confirmation email before relying on notifications.")
         return
 
+    job, job_config = _job_from_config(args.config)
     if args.command == "start":
-        config = config_from_args(args)
-        job = BackgroundJob(args.job_id or config.experiment_name)
+        pipeline_config, _ = load_job_config(args.config)
         request = {
-            "pipeline": config.to_dict(),
-            "shutdown_on": args.shutdown_on,
-            "sns_topic_arn": args.sns_topic_arn,
-            "region": os.environ.get("CP_AWS_REGION", "us-east-1"),
+            "pipeline": pipeline_config.to_dict(),
+            "job": {
+                "job_id": job_config.job_id,
+                "jobs_dir": str(job_config.jobs_dir),
+                "shutdown_on": job_config.shutdown_on,
+            },
+            "aws": asdict(job_config.aws),
         }
         status = job.start(request)
         _print_status(status)
         print(f"log:      {job.log_path}")
-        return
-
-    job = BackgroundJob(args.job_id)
-    if args.command == "status":
+    elif args.command == "status":
         _print_status(job.status(), args.json)
     elif args.command == "logs":
         _logs(job, args.lines, args.follow)

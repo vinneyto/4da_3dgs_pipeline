@@ -1,25 +1,46 @@
 # 4DAnyone → 3DGS pipeline
 
-Python orchestration for reproducible [4DAnyone](https://github.com/ant-research/4DAnyone) runs in AWS SageMaker Studio and export of one synchronized moment to the Nerfstudio/3DGS format.
+Reproducible [4DAnyone](https://github.com/ant-research/4DAnyone) inference and synchronized-frame export to the Nerfstudio/3DGS format.
 
-The current pipeline:
+## Architecture
 
-1. accepts one monocular input video;
-2. runs 4DAnyone with a configurable virtual-camera layout;
-3. exports a selected frame to `transforms.json`, images, masks, and a point cloud;
-4. optionally synchronizes the result to S3;
-5. supports detached execution with durable status, logs, SNS email notifications, and optional JupyterLab App shutdown.
+The repository deliberately separates the local pipeline from AWS orchestration.
 
-> This version prepares a **static** 3DGS dataset for a selected moment in time. Exporting all 121 temporal frames and training a dynamic 4DGS model are outside the current scope.
+| Component | Responsibility | AWS dependency |
+|---|---|---|
+| `FourDAnyonePipeline` | 4DAnyone inference and local Nerfstudio/3DGS export | None |
+| `fourda-pipeline` | Blocking local CLI around `FourDAnyonePipeline` | None |
+| `fourda-job` | Detached execution, durable status, S3 upload, SNS email, SageMaker App shutdown | Optional `[aws]` extra |
 
-## Default camera configuration
+`fourda-pipeline` never imports `boto3`, reads environment variables, uploads files, or calls an AWS API. The same core can run on a workstation, another cloud provider, or inside a future managed SageMaker Job.
 
-The defaults reproduce the validated Colab run:
+`fourda-job` is currently a console-based simulation of that future managed job. It runs the core pipeline as a detached process inside a JupyterLab App and owns every AWS-side effect.
+
+## One JSON run document
+
+All paths and run parameters are explicit in one JSON document. Neither CLI discovers paths through environment variables.
+
+```bash
+cp config/run.example.json config/run.json
+```
+
+Edit `config/run.json` before running anything. It has four sections:
+
+- `environment`: installation paths and pinned dependency versions used by setup scripts;
+- `pipeline`: local input, output, model, camera, and export parameters;
+- `job`: background job identity, status directory, and shutdown policy;
+- `aws`: region, bucket, S3 prefixes, SNS, and SageMaker App identity.
+
+The local CLI only requires `schema_version` and `pipeline`. The other sections may be omitted for a completely local run.
+
+All filesystem paths must be absolute. This makes a run document self-contained and prevents hidden differences between shells, `.bashrc` files, notebooks, and background workers.
+
+The checked-in [`config/run.example.json`](config/run.example.json) reproduces the validated camera setup:
 
 | Parameter | Value |
 |---|---:|
 | `views_per_layer` | 24 |
-| `layer_pitches` | `-15, 0, 15` |
+| `layer_pitches` | `[-15, 0, 15]` |
 | Total cameras | 72 |
 | `start_yaw` | 0° |
 | `yaw_span` | 360° |
@@ -28,166 +49,136 @@ The defaults reproduce the validated Colab run:
 | Model | turbo |
 | Exported frame | 60 |
 
-`RERUN_VIEW_COUNT=4` from the Colab notebook is not a 4DAnyone inference or export parameter. It belongs to downstream visualization and is therefore not part of this CLI.
+`RERUN_VIEW_COUNT=4` from the Colab notebook belongs to downstream visualization. It is not a 4DAnyone inference or export parameter.
 
-## Persistent Space layout
+## Persistent SageMaker Space layout
+
+The example configuration uses:
 
 ```text
-~/work/4DAnyone/              upstream 4DAnyone repository
-~/work/4da_3dgs_pipeline/     this repository
-~/4danyone-data/
+/home/sagemaker-user/work/4DAnyone/              upstream repository
+/home/sagemaker-user/work/4da_3dgs_pipeline/     this repository
+/home/sagemaker-user/4danyone-data/
 ├── input/
 ├── models/
 ├── runs/
-└── jobs/                     background requests, status files, and logs
+└── jobs/                                        job requests, status, and logs
 ```
 
-These directories reside on the Space's persistent 50 GB EBS volume and survive JupyterLab App restarts. GPU instance charges apply only while the App is running; EBS storage charges continue while the App is stopped.
+These directories reside on the Space's persistent EBS volume and survive JupyterLab App restarts. GPU instance charges apply only while the App is running; EBS storage charges continue while it is stopped.
 
 ## Environment setup
 
 ```bash
-cd "$HOME/work"
+cd /home/sagemaker-user/work
 git clone https://github.com/vinneyto/4da_3dgs_pipeline.git
 cd 4da_3dgs_pipeline
 
-chmod +x scripts/*.sh
-./scripts/setup_4danyone_env.sh
+cp config/run.example.json config/run.json
+# Edit every REPLACE_* value and verify all absolute paths.
+
+./scripts/setup_4danyone_env.sh config/run.json
 ```
 
-The script creates an isolated `$HOME/.conda/envs/4danyone` environment, installs a compatible CUDA PyTorch/Torchvision pair, replaces GUI OpenCV with its headless build, installs FFmpeg, and installs this CLI. It is safe to run on a CPU instance: the CUDA build is installed there and validated later on a GPU instance. On a GPU instance, the script also performs a real CUDA operation.
+The setup script reads every path and version from the JSON document. It creates the conda environment, clones the pinned upstream revision when needed, installs a compatible CUDA PyTorch/Torchvision pair, switches to headless OpenCV, installs FFmpeg, and installs this project with AWS job support.
 
-Recommended `~/.bashrc` settings:
+It is safe to run on a CPU instance. CUDA-enabled packages are installed there and validated later when a GPU is present.
+
+For a local installation that does not need AWS:
 
 ```bash
-export CP_4DA_ENV="$HOME/.conda/envs/4danyone"
-export CP_4DA_REPO_ROOT="$HOME/work/4DAnyone"
-export CP_4DA_DATA_ROOT="$HOME/4danyone-data"
-export CP_4DA_MODEL_DIR="$CP_4DA_DATA_ROOT/models"
-export CP_4DA_INPUT_DIR="$CP_4DA_DATA_ROOT/input"
-export CP_4DA_JOBS_DIR="$CP_4DA_DATA_ROOT/jobs"
-export PYTHONNOUSERSITE=1
-
-source /opt/conda/etc/profile.d/conda.sh
-conda activate "$CP_4DA_ENV"
+python -m pip install -e .
 ```
 
 ## Model download
 
-First, place the licensed SMPL-X archive at:
+Place the licensed SMPL-X archive at the bucket and prefix specified in the JSON document. With the example layout, the object is:
 
 ```text
-s3://${CP_4DA_BUCKET}/models/smplx/models_smplx_v1_1.zip
+s3://<aws.bucket>/<aws.models_prefix>/smplx/models_smplx_v1_1.zip
 ```
 
 Then run:
 
 ```bash
-cd "$HOME/work/4da_3dgs_pipeline"
-./scripts/download_4danyone_models.sh
+./scripts/download_4danyone_models.sh config/run.json
 ```
 
-This stage is CPU-safe as well. The script synchronizes existing files from S3, installs SMPL-X, and downloads any missing 4DAnyone, GVHMR, VGG-19, and BiRefNet assets.
+This CPU-safe script reads the conda, repository, model, region, bucket, and prefix values from JSON. It synchronizes existing model assets from S3, installs SMPL-X, downloads missing upstream assets, and validates the final model set.
 
-## Blocking run
-
-Use this mode first to validate the configuration. The terminal remains attached until the run completes.
+## Blocking local run
 
 ```bash
-fourda-pipeline \
-  --video "$CP_4DA_INPUT_DIR/leo.MOV" \
-  --experiment-name leon_video_72views_01 \
-  --views-per-layer 24 \
-  --layer-pitches=-15,0,15 \
-  --start-yaw 0 \
-  --yaw-span 360 \
-  --target-fps 30 \
-  --seed 42 \
-  --frame-indices 60
+fourda-pipeline --config config/run.json
 ```
 
-When `CP_4DA_BUCKET` is set, the result is automatically uploaded to:
+This command performs no AWS operations. It writes the selected synchronized moment to:
 
 ```text
-s3://${CP_4DA_BUCKET}/runs/leon_video_72views_01/
-```
-
-Use `--no-s3-upload` to disable the upload or `--s3-output-uri` to provide another destination.
-
-The exported moment is written to:
-
-```text
-~/4danyone-data/runs/leon_video_72views_01/nerfstudio/frame_060/
+<pipeline.runs_dir>/<pipeline.experiment_name>/nerfstudio/frame_060/
 ├── transforms.json
 ├── sparse_pcd.ply
 ├── images/
 └── masks/
 ```
 
-`--resume` reuses successfully completed intermediate outputs. Without it, an existing output directory is protected against accidental overwrite.
+Set `pipeline.resume` to `true` to reuse successfully completed intermediate outputs. When it is `false`, existing output directories are protected against accidental overwrite.
 
-## Background run and status
+## AWS-aware background job
 
-```bash
-fourda-job start \
-  --video "$CP_4DA_INPUT_DIR/leo.MOV" \
-  --experiment-name leon_video_72views_01 \
-  --views-per-layer 24 \
-  --layer-pitches=-15,0,15 \
-  --start-yaw 0 \
-  --yaw-span 360 \
-  --target-fps 30 \
-  --seed 42 \
-  --frame-indices 60 \
-  --shutdown-on success
-```
-
-After `start`, the terminal, VS Code, and browser tab may be closed. A detached worker continues to run inside the JupyterLab App.
+Start the detached worker:
 
 ```bash
-fourda-job status leon_video_72views_01
-fourda-job status leon_video_72views_01 --json
-fourda-job logs leon_video_72views_01 --lines 200
-fourda-job logs leon_video_72views_01 --follow
-fourda-job stop leon_video_72views_01
+fourda-job start --config config/run.json
 ```
 
-Progress is derived from native 4DAnyone stages. It indicates the current stage rather than an exact estimate of remaining time. Status is written atomically to `~/4danyone-data/jobs/<job-id>/status.json`.
+After it starts, the terminal, VS Code, and browser tab may be closed. The process continues inside the running JupyterLab App.
+
+```bash
+fourda-job status --config config/run.json
+fourda-job status --config config/run.json --json
+fourda-job logs --config config/run.json --lines 200
+fourda-job logs --config config/run.json --follow
+fourda-job stop --config config/run.json
+```
+
+The job layer:
+
+1. starts the AWS-independent core pipeline;
+2. records stage-based progress in `<job.jobs_dir>/<job.job_id>/status.json`;
+3. uploads the completed experiment to `s3://<bucket>/<runs_prefix>/<experiment_name>/` when `aws.upload_results` is `true`;
+4. sends an SNS success or failure email;
+5. applies `job.shutdown_on` and optionally stops the SageMaker JupyterLab App.
+
+Progress reflects native 4DAnyone stages, not an exact remaining-time estimate.
 
 ### Background execution limitation
 
-The worker runs **inside the SageMaker JupyterLab App**. If the App is stopped manually or by Idle Shutdown before completion, the process terminates. For a long run, configure an idle timeout with sufficient margin or use `--shutdown-on success`; the App will then stop itself immediately after the result, S3 upload, and email notification are complete.
+The worker still runs inside the JupyterLab App. Stopping the App manually or through Idle Shutdown terminates the worker. Configure the idle timeout with sufficient margin or use `"shutdown_on": "success"`; the worker then stops the App after local output, S3 upload, status persistence, and notification.
 
-Shutdown policies:
+Valid shutdown policies are:
 
 - `never` — never stop the App automatically;
-- `success` — stop only after a successful run;
+- `success` — stop only after a successful pipeline and upload;
 - `always` — stop after either success or failure.
 
-Shutdown uses SageMaker `DeleteApp`. It stops GPU compute without deleting the Space or its persistent EBS volume.
+Shutdown uses SageMaker `DeleteApp`. It stops compute without deleting the Space or its persistent EBS volume.
 
-## Amazon SNS email notifications
+## Amazon SNS email
 
-The execution role must allow `sns:CreateTopic`, `sns:Subscribe`, and `sns:Publish`. After granting those permissions, configure email from inside the Space:
-
-```bash
-fourda-job configure-email --email you@example.com
-```
-
-AWS sends a `Subscription Confirmation` email. Confirm it before relying on notifications. Configuration is stored in `~/.config/4da-3dgs-pipeline/aws.json`. Background jobs then send an email after success or failure and before any automatic App shutdown.
-
-`--shutdown-on` also requires `sagemaker:DeleteApp` and the following environment variables:
+The execution role must allow `sns:CreateTopic`, `sns:Subscribe`, and `sns:Publish`. Configure `aws.sns.topic_name` and `aws.sns.email`, then run:
 
 ```bash
-export CP_SM_DOMAIN_ID="d-..."
-export CP_SM_SPACE_NAME="cp-4da-jupyter-${CP_DEPLOYMENT_ID}"
-export CP_SM_JUPYTER_APP_NAME="default"
-export CP_AWS_REGION="us-east-1"
+fourda-job configure-email --config config/run.json
 ```
+
+Confirm the AWS `Subscription Confirmation` email before relying on notifications. No second AWS configuration file is created; the run JSON remains the single source of truth.
+
+Automatic shutdown additionally requires `sagemaker:DeleteApp`. Domain ID, Space name, and App name are read from `aws.sagemaker` in the same JSON document.
 
 ## Tests
 
-The tests do not run model inference and do not require a GPU:
+Tests do not run model inference and do not require a GPU:
 
 ```bash
 python -m pip install -e '.[dev]'

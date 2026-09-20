@@ -1,59 +1,67 @@
 #!/usr/bin/env bash
 
-# Download and validate model assets. This step is CPU-safe.
+# Download and validate model assets using paths and AWS settings from JSON.
+# This stage is CPU-safe.
 
 set -Eeuo pipefail
 
-CP_4DA_ENV="${CP_4DA_ENV:-$HOME/.conda/envs/4danyone}"
-CP_4DA_REPO_ROOT="${CP_4DA_REPO_ROOT:-$HOME/work/4DAnyone}"
-CP_4DA_DATA_ROOT="${CP_4DA_DATA_ROOT:-$HOME/4danyone-data}"
-CP_4DA_MODEL_DIR="${CP_4DA_MODEL_DIR:-$CP_4DA_DATA_ROOT/models}"
-CP_AWS_REGION="${CP_AWS_REGION:-us-east-1}"
-export CP_4DA_ENV CP_4DA_REPO_ROOT CP_4DA_DATA_ROOT CP_4DA_MODEL_DIR CP_AWS_REGION
+[[ $# -eq 1 ]] || { echo "usage: $0 /absolute/path/to/run.json" >&2; exit 2; }
+CONFIG_PATH="$1"
+[[ -f "$CONFIG_PATH" ]] || { echo "config not found: $CONFIG_PATH" >&2; exit 2; }
 
-SMPLX_ARCHIVE="$CP_4DA_MODEL_DIR/smplx/models_smplx_v1_1.zip"
-SMPLX_MODEL="$CP_4DA_MODEL_DIR/body_models/smplx/SMPLX_NEUTRAL.npz"
-GVHMR_ROOT="$CP_4DA_REPO_ROOT/third_party/GVHMR"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+READ_CONFIG="$SCRIPT_DIR/read_config.py"
+get() { /usr/bin/python3 "$READ_CONFIG" "$CONFIG_PATH" "$1"; }
+
+CONDA_BOOTSTRAP="$(get environment.conda_bootstrap)"
+CONDA_ENV="$(get environment.conda_env)"
+FOURDANYONE_ROOT="$(get pipeline.fourdanyone_root)"
+MODEL_DIR="$(get pipeline.model_dir)"
+AWS_REGION="$(get aws.region)"
+S3_BUCKET="$(get aws.bucket)"
+MODELS_PREFIX="$(get aws.models_prefix)"
+
+SMPLX_ARCHIVE="$MODEL_DIR/smplx/models_smplx_v1_1.zip"
+SMPLX_MODEL="$MODEL_DIR/body_models/smplx/SMPLX_NEUTRAL.npz"
+GVHMR_ROOT="$FOURDANYONE_ROOT/third_party/GVHMR"
 
 log() { printf '\n[%s] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*"; }
 fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
-[[ -d "$CP_4DA_REPO_ROOT/.git" ]] || fail "4DAnyone repository not found: $CP_4DA_REPO_ROOT"
+[[ -f "$CONDA_BOOTSTRAP" ]] || fail "Conda bootstrap not found: $CONDA_BOOTSTRAP"
+[[ -d "$FOURDANYONE_ROOT/.git" ]] || fail "4DAnyone repository not found: $FOURDANYONE_ROOT"
 [[ -f "$GVHMR_ROOT/hmr4d/__init__.py" ]] || fail "GVHMR submodule is not initialized"
-[[ -x "$CP_4DA_ENV/bin/python" ]] || fail "Conda environment not found: $CP_4DA_ENV"
+[[ -x "$CONDA_ENV/bin/python" ]] || fail "Conda environment not found: $CONDA_ENV"
 
-# shellcheck disable=SC1091
-source /opt/conda/etc/profile.d/conda.sh
-conda activate "$CP_4DA_ENV"
-export PYTHONNOUSERSITE=1
-mkdir -p "$CP_4DA_MODEL_DIR"
-cd "$CP_4DA_REPO_ROOT"
+# shellcheck disable=SC1090
+source "$CONDA_BOOTSTRAP"
+conda activate "$CONDA_ENV"
+mkdir -p "$MODEL_DIR"
+cd "$FOURDANYONE_ROOT"
 
-if [[ -n "${CP_4DA_BUCKET:-}" ]]; then
-  log "Synchronizing existing models from S3"
-  aws s3 sync "s3://${CP_4DA_BUCKET}/models/" "$CP_4DA_MODEL_DIR/" \
-    --region "$CP_AWS_REGION" --no-cli-pager
-fi
+log "Synchronizing existing models from S3"
+aws s3 sync "s3://${S3_BUCKET}/${MODELS_PREFIX}/" "$MODEL_DIR/" \
+  --region "$AWS_REGION" --no-cli-pager
 
 if [[ ! -f "$SMPLX_MODEL" ]]; then
   [[ -f "$SMPLX_ARCHIVE" ]] || fail "Licensed SMPL-X archive not found: $SMPLX_ARCHIVE"
   log "Installing SMPL-X"
   python scripts/download_smplx.py \
     --archive_path "$SMPLX_ARCHIVE" \
-    --model_dir "$CP_4DA_MODEL_DIR" \
+    --model_dir "$MODEL_DIR" \
     --gvhmr_root "$GVHMR_ROOT"
 fi
 
-log "Downloading missing 4DAnyone, GVHMR, VGG-19 and BiRefNet assets"
-python scripts/download_model.py --model_dir "$CP_4DA_MODEL_DIR" --gvhmr_root "$GVHMR_ROOT"
+log "Downloading missing 4DAnyone, GVHMR, VGG-19, and BiRefNet assets"
+python scripts/download_model.py --model_dir "$MODEL_DIR" --gvhmr_root "$GVHMR_ROOT"
 
 log "Validating model files"
-python - <<'PY'
-import os
+python - "$MODEL_DIR" <<'PY'
+import sys
 from pathlib import Path
 from fdanyone.assets import BIREFNET_DIR, BIREFNET_FILES, MODEL_FILES, SMPLX_MODEL
 
-root = Path(os.environ["CP_4DA_MODEL_DIR"])
+root = Path(sys.argv[1])
 required = [*(root / p for p in MODEL_FILES), *(root / BIREFNET_DIR / p for p in BIREFNET_FILES), root / SMPLX_MODEL]
 missing = [p for p in required if not p.is_file()]
 if missing:
@@ -62,6 +70,6 @@ print(f"Models: OK — {len(required)} required files found")
 PY
 
 find "$GVHMR_ROOT/inputs/checkpoints" -type l -printf '%p -> %l\n' | sort
-du -sh "$CP_4DA_MODEL_DIR"
-df -h "$HOME"
+du -sh "$MODEL_DIR"
+df -h "$(dirname "$MODEL_DIR")"
 log "Model setup completed"

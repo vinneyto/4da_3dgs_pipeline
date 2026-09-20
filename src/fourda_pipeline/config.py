@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import json
-import os
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -13,9 +12,15 @@ DEFAULT_LAYER_PITCHES = (-15, 0, 15)
 DEFAULT_FRAME_INDICES = (60,)
 
 
-def _home_path(environment_name: str, fallback: str) -> Path:
-    return Path(os.environ.get(environment_name, fallback)).expanduser()
-
+def load_pipeline_config(path: Path) -> "FourDAnyoneConfig":
+    document = json.loads(path.read_text())
+    if document.get("schema_version") != 1:
+        raise ValueError("config schema_version must be 1")
+    try:
+        payload = document["pipeline"]
+    except KeyError as error:
+        raise ValueError("config must contain a pipeline object") from error
+    return FourDAnyoneConfig.from_dict(payload)
 
 @dataclass(frozen=True, slots=True)
 class FourDAnyoneConfig:
@@ -23,12 +28,9 @@ class FourDAnyoneConfig:
 
     video_path: Path
     experiment_name: str
-    fourdanyone_root: Path = field(
-        default_factory=lambda: _home_path("CP_4DA_REPO_ROOT", str(Path.home() / "work/4DAnyone"))
-    )
-    data_root: Path = field(default_factory=lambda: _home_path("CP_4DA_DATA_ROOT", str(Path.home() / "4danyone-data")))
-    model_dir: Path | None = None
-    runs_dir: Path | None = None
+    fourdanyone_root: Path
+    model_dir: Path
+    runs_dir: Path
     views_per_layer: int = 24
     layer_pitches: tuple[int, ...] = DEFAULT_LAYER_PITCHES
     start_yaw: int = 0
@@ -39,23 +41,13 @@ class FourDAnyoneConfig:
     attention_backend: str = "auto"
     frame_indices: tuple[int, ...] = DEFAULT_FRAME_INDICES
     export_device: str = "cuda:0"
-    s3_output_uri: str | None = None
     resume: bool = False
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "video_path", Path(self.video_path).expanduser())
-        object.__setattr__(self, "fourdanyone_root", Path(self.fourdanyone_root).expanduser())
-        object.__setattr__(self, "data_root", Path(self.data_root).expanduser())
-        object.__setattr__(
-            self,
-            "model_dir",
-            Path(self.model_dir).expanduser() if self.model_dir else self.data_root / "models",
-        )
-        object.__setattr__(
-            self,
-            "runs_dir",
-            Path(self.runs_dir).expanduser() if self.runs_dir else self.data_root / "runs",
-        )
+        object.__setattr__(self, "video_path", Path(self.video_path))
+        object.__setattr__(self, "fourdanyone_root", Path(self.fourdanyone_root))
+        object.__setattr__(self, "model_dir", Path(self.model_dir))
+        object.__setattr__(self, "runs_dir", Path(self.runs_dir))
         object.__setattr__(self, "layer_pitches", tuple(int(value) for value in self.layer_pitches))
         object.__setattr__(self, "frame_indices", tuple(int(value) for value in self.frame_indices))
         self.validate_values()
@@ -66,7 +58,6 @@ class FourDAnyoneConfig:
 
     @property
     def experiment_dir(self) -> Path:
-        assert self.runs_dir is not None
         return self.runs_dir / self.experiment_name
 
     @property
@@ -81,6 +72,15 @@ class FourDAnyoneConfig:
         return self.datasets_dir / f"frame_{frame_index:03d}"
 
     def validate_values(self) -> None:
+        paths = {
+            "video_path": self.video_path,
+            "fourdanyone_root": self.fourdanyone_root,
+            "model_dir": self.model_dir,
+            "runs_dir": self.runs_dir,
+        }
+        relative = [f"{name}: {path}" for name, path in paths.items() if not path.is_absolute()]
+        if relative:
+            raise ValueError("all paths must be absolute:\n" + "\n".join(f" - {item}" for item in relative))
         if not self.experiment_name or any(part in self.experiment_name for part in ("/", "\\", "..")):
             raise ValueError("experiment_name must be a simple directory name")
         if self.views_per_layer < 1:
@@ -112,13 +112,12 @@ class FourDAnyoneConfig:
         missing = [f"{label}: {path}" for path, label in required if not path.is_file()]
         if missing:
             raise FileNotFoundError("Missing required paths:\n" + "\n".join(f" - {item}" for item in missing))
-        assert self.model_dir is not None
         if not self.model_dir.is_dir():
             raise FileNotFoundError(f"model directory does not exist: {self.model_dir}")
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
-        for key in ("video_path", "fourdanyone_root", "data_root", "model_dir", "runs_dir"):
+        for key in ("video_path", "fourdanyone_root", "model_dir", "runs_dir"):
             payload[key] = str(payload[key])
         payload["layer_pitches"] = list(self.layer_pitches)
         payload["frame_indices"] = list(self.frame_indices)

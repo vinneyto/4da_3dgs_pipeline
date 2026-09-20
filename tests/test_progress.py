@@ -5,10 +5,20 @@ from fourda_pipeline.config import FourDAnyoneConfig
 from fourda_pipeline.pipeline import FourDAnyonePipeline
 
 
+def make_config(tmp_path: Path) -> FourDAnyoneConfig:
+    return FourDAnyoneConfig(
+        video_path=tmp_path / "in.mov",
+        experiment_name="test",
+        fourdanyone_root=tmp_path / "4DAnyone",
+        model_dir=tmp_path / "data/models",
+        runs_dir=tmp_path / "data/runs",
+    )
+
+
 def test_native_inference_progress_maps_to_overall_range(tmp_path: Path) -> None:
     updates = []
     pipeline = FourDAnyonePipeline(
-        FourDAnyoneConfig(video_path=tmp_path / "in.mov", experiment_name="test"),
+        make_config(tmp_path),
         on_progress=updates.append,
     )
     pipeline._handle_inference_line(
@@ -20,12 +30,7 @@ def test_native_inference_progress_maps_to_overall_range(tmp_path: Path) -> None
 
 
 def test_export_command_uses_official_exporter(tmp_path: Path) -> None:
-    config = FourDAnyoneConfig(
-        video_path=tmp_path / "in.mov",
-        experiment_name="test",
-        fourdanyone_root=tmp_path / "4DAnyone",
-        data_root=tmp_path / "data",
-    )
+    config = make_config(tmp_path)
     command = FourDAnyonePipeline(config).build_export_command(60)
     assert command[1].endswith("scripts/export_nerfstudio.py")
     assert command[command.index("--frame_index") + 1] == "60"

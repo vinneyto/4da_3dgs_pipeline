@@ -13,14 +13,6 @@ from typing import Any
 from .status import JobStatus, utc_now
 
 
-def default_jobs_root() -> Path:
-    configured = os.environ.get("CP_4DA_JOBS_DIR")
-    if configured:
-        return Path(configured).expanduser()
-    data_root = Path(os.environ.get("CP_4DA_DATA_ROOT", "~/4danyone-data")).expanduser()
-    return data_root / "jobs"
-
-
 def validate_job_id(job_id: str) -> str:
     if not job_id or any(part in job_id for part in ("/", "\\", "..")):
         raise ValueError("job_id must be a simple directory name")
@@ -28,9 +20,11 @@ def validate_job_id(job_id: str) -> str:
 
 
 class BackgroundJob:
-    def __init__(self, job_id: str, jobs_root: Path | None = None) -> None:
+    def __init__(self, job_id: str, jobs_root: Path) -> None:
         self.job_id = validate_job_id(job_id)
-        self.root = (jobs_root or default_jobs_root()) / self.job_id
+        if not jobs_root.is_absolute():
+            raise ValueError(f"jobs_root must be absolute: {jobs_root}")
+        self.root = jobs_root / self.job_id
         self.request_path = self.root / "request.json"
         self.status_path = self.root / "status.json"
         self.log_path = self.root / "pipeline.log"

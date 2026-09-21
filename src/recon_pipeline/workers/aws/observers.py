@@ -25,7 +25,9 @@ from recon_pipeline.core.events import (
 )
 
 from .aws import (
+    edit_telegram,
     get_telegram_updates,
+    publish_email,
     publish_notification,
     publish_telegram,
     stop_sagemaker_app,
@@ -207,6 +209,7 @@ class AwsNotificationObserver(QueuedPipelineObserver):
         super().__init__(thread_name=f"aws-notifications-{worker.job_id}")
         self.worker = worker
         self.experiment_name = experiment_name
+        self._telegram_pass_messages: dict[str, int] = {}
 
     def _publish(self, subject: str, body: str) -> None:
         outcomes = publish_notification(self.worker, subject, body)
@@ -214,6 +217,45 @@ class AwsNotificationObserver(QueuedPipelineObserver):
 
     def _resources(self) -> str:
         return collect_machine_resource_status(self.worker)
+
+    def _publish_pass_started(self, event: PassStarted, body: str) -> None:
+        subject = f"🔵 Pass {event.pass_index}/{event.pass_count} started"
+        outcomes: dict[str, str] = {}
+        if self.worker.sns is not None and self.worker.sns.enabled:
+            outcomes["email"] = publish_email(self.worker, subject, body)
+        if self.worker.telegram is not None and self.worker.telegram.enabled:
+            try:
+                message_id = publish_telegram(self.worker, subject, body)
+                self._telegram_pass_messages[event.pass_id] = message_id
+                outcomes["telegram"] = f"sent (message {message_id})"
+            except Exception as error:
+                outcomes["telegram"] = f"skipped: {error}"
+        print(f"Notifications: {outcomes or 'disabled'}", flush=True)
+
+    def _publish_pass_finished(
+        self,
+        event: PassCompleted | PassFailed,
+        subject: str,
+        body: str,
+    ) -> None:
+        outcomes: dict[str, str] = {}
+        if self.worker.sns is not None and self.worker.sns.enabled:
+            outcomes["email"] = publish_email(self.worker, subject, body)
+        if self.worker.telegram is not None and self.worker.telegram.enabled:
+            message_id = self._telegram_pass_messages.pop(event.pass_id, None)
+            if message_id is not None:
+                try:
+                    edit_telegram(self.worker, message_id, subject, body)
+                    outcomes["telegram"] = f"edited (message {message_id})"
+                except Exception as error:
+                    outcomes["telegram"] = f"edit skipped: {error}"
+            if message_id is None or not outcomes["telegram"].startswith("edited"):
+                try:
+                    fallback_id = publish_telegram(self.worker, subject, body)
+                    outcomes["telegram"] = f"sent (message {fallback_id})"
+                except Exception as error:
+                    outcomes["telegram"] = f"skipped: {error}"
+        print(f"Notifications: {outcomes or 'disabled'}", flush=True)
 
     def process(self, event: PipelineEvent, context: PipelineContext) -> None:
         if isinstance(event, PipelineStarted):
@@ -226,13 +268,14 @@ class AwsNotificationObserver(QueuedPipelineObserver):
                 f"Experiment: {self.experiment_name}\nPasses:\n{passes}",
             )
         elif isinstance(event, PassStarted):
-            self._publish(
-                f"Pass {event.pass_index}/{event.pass_count} started",
+            self._publish_pass_started(
+                event,
                 f"{event.pass_name}\n{self._resources()}",
             )
         elif isinstance(event, PassCompleted):
-            self._publish(
-                f"Pass {event.pass_index}/{event.pass_count} completed",
+            self._publish_pass_finished(
+                event,
+                f"✅ Pass {event.pass_index}/{event.pass_count} completed",
                 "\n".join(
                     [
                         event.pass_name,
@@ -251,8 +294,9 @@ class AwsNotificationObserver(QueuedPipelineObserver):
             ]
             if output:
                 lines.extend(["", "Output tail:", output])
-            self._publish(
-                f"Pass {event.pass_index}/{event.pass_count} failed",
+            self._publish_pass_finished(
+                event,
+                f"❌ Pass {event.pass_index}/{event.pass_count} failed",
                 "\n".join(lines),
             )
 

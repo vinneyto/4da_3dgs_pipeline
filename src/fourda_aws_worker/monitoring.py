@@ -10,11 +10,14 @@ import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from .config import AwsWorkerConfig
 
 
 TelegramPublisher = Callable[[str, str], None]
+TelegramUpdateFetcher = Callable[[int | None, int], list[dict[str, Any]]]
+SageMakerShutdown = Callable[[], None]
 MAX_TELEGRAM_BODY = 3500
 MAX_LOG_BACKLOG = 32000
 
@@ -198,6 +201,95 @@ class TelegramResourceMonitor:
                 pass
 
 
+class TelegramCommandMonitor:
+    """Accept authenticated control commands for exactly one worker App."""
+
+    def __init__(
+        self,
+        config: AwsWorkerConfig,
+        publish: TelegramPublisher,
+        get_updates: TelegramUpdateFetcher,
+        shutdown: SageMakerShutdown,
+        *,
+        poll_timeout_seconds: int = 20,
+    ) -> None:
+        self.config = config
+        self.publish = publish
+        self.get_updates = get_updates
+        self.shutdown = shutdown
+        self.poll_timeout_seconds = poll_timeout_seconds
+        self._stop = threading.Event()
+        self._thread = threading.Thread(
+            target=self._run,
+            name=f"telegram-commands-{config.job_id}",
+            daemon=True,
+        )
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._thread.join(timeout=self.poll_timeout_seconds + 5)
+
+    def _authorized(self, message: dict[str, Any]) -> bool:
+        telegram = self.config.telegram
+        assert telegram is not None
+        chat_id = str(message.get("chat", {}).get("id", ""))
+        user_id = str(message.get("from", {}).get("id", ""))
+        return chat_id == telegram.chat_id and user_id == telegram.shutdown_user_id
+
+    def _handle(self, update: dict[str, Any]) -> None:
+        message = update.get("message") or {}
+        text = str(message.get("text", "")).strip()
+        command, _, argument = text.partition(" ")
+        command = command.split("@", 1)[0].casefold()
+        if command != "/shutdown" or not self._authorized(message):
+            return
+        requested_job = argument.strip()
+        if requested_job and requested_job != self.config.job_id:
+            self.publish(
+                f"Shutdown ignored: {self.config.job_id}",
+                f"Command targeted a different job: {requested_job}",
+            )
+            return
+        self.publish(
+            f"Stopping SageMaker App: {self.config.job_id}",
+            "Authorized /shutdown command received. The worker and its current pass "
+            "will be terminated when SageMaker stops the App.",
+        )
+        try:
+            self.shutdown()
+        except Exception as error:
+            self.publish(
+                f"SageMaker shutdown failed: {self.config.job_id}",
+                f"{type(error).__name__}: {error}",
+            )
+        else:
+            self._stop.set()
+
+    def _run(self) -> None:
+        offset: int | None = None
+        try:
+            # Never execute a command that was queued before this worker started.
+            pending = self.get_updates(None, 0)
+            if pending:
+                offset = max(int(item["update_id"]) for item in pending) + 1
+        except Exception:
+            pass
+        while not self._stop.is_set():
+            try:
+                updates = self.get_updates(offset, self.poll_timeout_seconds)
+                for update in updates:
+                    offset = int(update["update_id"]) + 1
+                    self._handle(update)
+                    if self._stop.is_set():
+                        break
+            except Exception:
+                # Bot polling is control-plane convenience, never job-critical.
+                self._stop.wait(5)
+
+
 class TelegramRuntimeMonitoring:
     """Own the optional monitoring threads for one worker process."""
 
@@ -206,8 +298,12 @@ class TelegramRuntimeMonitoring:
         config: AwsWorkerConfig,
         job_dir: Path,
         publish: TelegramPublisher,
+        get_updates: TelegramUpdateFetcher | None = None,
+        shutdown: SageMakerShutdown | None = None,
     ) -> None:
-        self.monitors: list[TelegramLogTailer | TelegramResourceMonitor] = []
+        self.monitors: list[
+            TelegramLogTailer | TelegramResourceMonitor | TelegramCommandMonitor
+        ] = []
         telegram = config.telegram
         if telegram is None or not telegram.enabled:
             return
@@ -223,6 +319,10 @@ class TelegramRuntimeMonitoring:
                     telegram.resource_status_interval_seconds,
                     publish,
                 )
+            )
+        if telegram.shutdown_command and get_updates is not None and shutdown is not None:
+            self.monitors.append(
+                TelegramCommandMonitor(config, publish, get_updates, shutdown)
             )
 
     def start(self) -> None:

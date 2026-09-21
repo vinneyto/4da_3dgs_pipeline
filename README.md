@@ -295,15 +295,29 @@ Persist that export in the SageMaker Space's `~/.bashrc`, then configure:
   "telegram": {
     "enabled": true,
     "chat_id": "REPLACE_WITH_CHAT_ID",
-    "bot_token_env": "CP_4DA_TELEGRAM_BOT_TOKEN"
+    "bot_token_env": "CP_4DA_TELEGRAM_BOT_TOKEN",
+    "stream_logs": false,
+    "resource_status_interval_seconds": null,
+    "shutdown_command": true,
+    "allowed_user_id": null
   }
 }
 ```
 
 The worker validates the bot and chat with `getChat` during its health check and uses
-`sendMessage` for start, success, and failure messages. A literal `bot_token` is also
+`sendMessage` for every pass start and completion. A failed pass includes its duration,
+error, and a bounded tail of the subprocess's combined stdout/stderr. A literal `bot_token` is also
 accepted instead of `bot_token_env`, but it writes the secret into the run document and
 detached job request and is therefore not recommended.
+
+While the worker is running, send `/shutdown` to the bot to delete the configured
+SageMaker JupyterLab App. `/shutdown JOB_ID` is also accepted and refuses to stop an App
+when the argument differs from the current job. Both the message `chat_id` and sender ID
+must match the configuration. For a private bot chat, `allowed_user_id` can remain `null`
+because the chat ID is also the user ID. For a group chat, set `allowed_user_id` explicitly.
+Set `shutdown_command` to `false` to disable bot control. Telegram long polling requires
+that the bot is not simultaneously configured with a webhook, and one bot token should
+control only one active worker at a time.
 
 ### Amazon SNS email
 

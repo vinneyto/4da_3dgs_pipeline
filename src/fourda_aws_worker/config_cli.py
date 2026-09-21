@@ -168,6 +168,16 @@ def build_parser() -> argparse.ArgumentParser:
             "(the token is never written to JSON)"
         ),
     )
+    notifications.add_argument(
+        "--telegram-shutdown-command",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Allow the authorized chat/user to stop this SageMaker App with /shutdown",
+    )
+    notifications.add_argument(
+        "--telegram-allowed-user-id",
+        help="Telegram user ID authorized for /shutdown (defaults to chat ID)",
+    )
 
     sagemaker = parser.add_argument_group("SageMaker")
     sagemaker.add_argument("--sagemaker-domain-id", required=True)
@@ -335,6 +345,8 @@ def build_document(args: argparse.Namespace) -> dict[str, Any]:
                         "resource_status_interval_seconds": (
                             args.telegram_resource_status_interval_seconds
                         ),
+                        "shutdown_command": args.telegram_shutdown_command,
+                        "allowed_user_id": args.telegram_allowed_user_id,
                     }
                     if args.telegram_chat_id
                     else None

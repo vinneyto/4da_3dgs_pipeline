@@ -39,6 +39,8 @@ class TelegramConfig:
     enabled: bool = True
     stream_logs: bool = False
     resource_status_interval_seconds: int | None = None
+    shutdown_command: bool = True
+    allowed_user_id: str | None = None
 
     def __post_init__(self) -> None:
         if self.enabled and not self.chat_id:
@@ -54,6 +56,13 @@ class TelegramConfig:
             raise ValueError(
                 "telegram resource_status_interval_seconds must be at least 60"
             )
+        if self.allowed_user_id is not None and not self.allowed_user_id.strip():
+            raise ValueError("telegram allowed_user_id must not be empty")
+
+    @property
+    def shutdown_user_id(self) -> str:
+        """User allowed to stop the configured App; private chats need no extra ID."""
+        return self.allowed_user_id or self.chat_id
 
     def resolve_bot_token(self) -> str:
         if self.bot_token:

@@ -115,6 +115,8 @@ def test_generator_writes_optional_telegram_monitoring(tmp_path: Path) -> None:
     assert worker.telegram is not None
     assert worker.telegram.stream_logs is True
     assert worker.telegram.resource_status_interval_seconds == 60
+    assert worker.telegram.shutdown_command is True
+    assert worker.telegram.shutdown_user_id == "123456"
 
 
 def test_generator_writes_new_relative_bucket_shape_and_rerun(tmp_path: Path) -> None:

@@ -23,7 +23,14 @@ from fourda_pipeline.events import (
     PipelineSucceeded,
 )
 
-from .aws import publish_completion, publish_notification, publish_started, publish_telegram
+from .aws import (
+    get_telegram_updates,
+    publish_completion,
+    publish_notification,
+    publish_started,
+    publish_telegram,
+    stop_sagemaker_app,
+)
 from .artifacts import AWS_HEALTH, RUN_RESULT, S3_RESULT
 from .config import AwsWorkerConfig
 from .monitoring import TelegramRuntimeMonitoring
@@ -38,6 +45,15 @@ def _format_duration(seconds: float) -> str:
     if minutes:
         return f"{minutes}m {seconds:.0f}s"
     return f"{seconds:.1f}s"
+
+
+def _failure_output(error: BaseException, limit: int = 3000) -> str | None:
+    output = str(getattr(error, "output_tail", "")).strip()
+    if not output:
+        return None
+    if len(output) > limit:
+        output = "[... earlier output omitted ...]\n" + output[-limit:]
+    return output
 
 
 class ConsoleObserver(PipelineObserver):
@@ -185,15 +201,20 @@ class AwsNotificationObserver(QueuedPipelineObserver):
         print(f"Notifications: {outcomes or 'disabled'}", flush=True)
 
     def process(self, event: PipelineEvent, context: PipelineContext) -> None:
-        if isinstance(event, PassCompleted) and event.pass_id == "aws-preflight":
-            outcomes = publish_started(
-                self.worker,
-                context.require(AWS_HEALTH),
-                self.experiment_name,
-                event.duration_seconds,
+        if isinstance(event, PassStarted):
+            self._publish(
+                f"Pass {event.pass_index}/{event.pass_count} started",
+                event.pass_name,
             )
-            print(f"Start notifications: {outcomes or 'disabled'}", flush=True)
         elif isinstance(event, PassCompleted):
+            if event.pass_id == "aws-preflight":
+                outcomes = publish_started(
+                    self.worker,
+                    context.require(AWS_HEALTH),
+                    self.experiment_name,
+                    event.duration_seconds,
+                )
+                print(f"Start notifications: {outcomes or 'disabled'}", flush=True)
             next_line = (
                 f"Next: {event.next_pass_name}"
                 if event.next_pass_name
@@ -210,16 +231,18 @@ class AwsNotificationObserver(QueuedPipelineObserver):
                 ),
             )
         elif isinstance(event, PassFailed):
+            output = _failure_output(event.error)
+            lines = [
+                event.pass_name,
+                f"Duration: {_format_duration(event.duration_seconds)}",
+                f"Error: {event.error}",
+            ]
+            if output:
+                lines.extend(["", "Output tail:", output])
+            lines.append(f"Shutdown policy: {self.worker.shutdown_on}")
             self._publish(
                 f"Pass {event.pass_index}/{event.pass_count} failed",
-                "\n".join(
-                    [
-                        event.pass_name,
-                        f"Duration: {_format_duration(event.duration_seconds)}",
-                        f"Error: {event.error}",
-                        f"Shutdown policy: {self.worker.shutdown_on}",
-                    ]
-                ),
+                "\n".join(lines),
             )
         elif isinstance(event, PipelineSucceeded):
             result = context.artifacts.get(RUN_RESULT, {})
@@ -252,6 +275,8 @@ class RuntimeMonitoringObserver(PipelineObserver):
             worker,
             job_dir,
             lambda subject, message: publish_telegram(worker, subject, message),
+            lambda offset, timeout: get_telegram_updates(worker, offset, timeout),
+            lambda: stop_sagemaker_app(worker.region, worker.sagemaker),
         )
 
     def start(self, context: PipelineContext) -> None:

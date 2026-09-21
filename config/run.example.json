@@ -82,8 +82,6 @@
         "enabled": false,
         "chat_id": "REPLACE_WITH_TELEGRAM_CHAT_ID",
         "bot_token_env": "CP_4DA_TELEGRAM_BOT_TOKEN",
-        "stream_logs": false,
-        "resource_status_interval_seconds": null,
         "shutdown_command": true,
         "allowed_user_id": null
       }

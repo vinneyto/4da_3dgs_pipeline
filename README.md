@@ -24,11 +24,16 @@ The source tree mirrors this boundary:
 
 ```text
 src/fourda_pipeline/   # cloud-independent Pipeline, pass contracts, events
-src/fourda_4danyone/   # 4DAnyone pass provider
-src/fourda_nerfstudio/ # synchronized-frame artifact pass
-src/fourda_rerun/      # interactive recording artifact pass
-src/fourda_aws_worker/ # AWS passes, observers, builder, and detached jobs
+src/fourda_4danyone/passes/   # one module per 4DAnyone pass
+src/fourda_nerfstudio/passes/ # one module per synchronized-frame artifact pass
+src/fourda_rerun/passes/      # one module per recording artifact pass
+src/fourda_aws_worker/passes/ # one module per AWS staging/persistence pass
+src/fourda_aws_worker/finalizers/ # AWS finalizers, separate from ordinary passes
 ```
+
+Every concrete pass lives in its own module. Each package re-exports its pass classes
+through `passes/__init__.py`, so composition roots depend on a stable public package
+surface instead of implementation file names.
 
 `fourda-aws-worker` is currently a console-based worker that simulates a future managed SageMaker Job. It runs the core pipeline as a detached job inside a JupyterLab App and owns every AWS-side effect. A future RunPod or local worker can be added as another package without modifying `fourda_pipeline`.
 

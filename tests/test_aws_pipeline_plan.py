@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from fourda_aws_worker import passes as aws_passes
-from fourda_aws_worker.passes import SageMakerShutdownFinalizer
+from fourda_aws_worker.finalizers import SageMakerShutdownFinalizer
+from fourda_aws_worker.finalizers import sagemaker_shutdown
 from fourda_aws_worker.pipeline import build_aws_pipeline
 from fourda_aws_worker.status import JobStatus
 from fourda_nerfstudio.config import NerfstudioArtifactConfig
@@ -93,7 +93,7 @@ def test_shutdown_finalizer_applies_outcome_policy(
     worker = make_worker_config(tmp_path, shutdown_on=policy)
     calls = []
     monkeypatch.setattr(
-        aws_passes,
+        sagemaker_shutdown,
         "stop_sagemaker_app",
         lambda region, app: calls.append((region, app)),
     )

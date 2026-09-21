@@ -11,6 +11,7 @@ from fourda_pipeline.core import Pipeline
 from fourda_rerun.passes import RerunExportPass
 
 from .config import AwsWorkerConfig
+from .finalizers import SageMakerShutdownFinalizer
 from .observers import (
     AwsNotificationObserver,
     ConsoleObserver,
@@ -23,7 +24,6 @@ from .passes import (
     S3RestoreExperimentPass,
     S3SyncModelsPass,
     S3UploadResultsPass,
-    SageMakerShutdownFinalizer,
     WriteRunManifestPass,
 )
 from .status import JobStatus

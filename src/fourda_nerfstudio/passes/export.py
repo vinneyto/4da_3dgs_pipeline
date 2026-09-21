@@ -1,18 +1,17 @@
-"""Nerfstudio synchronized-frame artifact pass."""
+"""Export synchronized 4DAnyone frames as Nerfstudio datasets."""
 
 from __future__ import annotations
 
 import shutil
 import sys
-from pathlib import Path
 
 from fourda_4danyone.artifacts import (
     EXPERIMENT_WORKSPACE,
     MODEL_CACHE,
     experiment_artifact,
 )
-from fourda_pipeline.command import CommandRunner
 from fourda_4danyone.config import FourDAnyoneConfig
+from fourda_pipeline.command import CommandRunner
 from fourda_pipeline.core import PassResult, PipelineContext
 
 

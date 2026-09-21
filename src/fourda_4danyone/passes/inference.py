@@ -1,4 +1,4 @@
-"""Passes that produce the recovered multi-view 4DAnyone experiment."""
+"""Run 4DAnyone inference and expose the recovered experiment artifact."""
 
 from __future__ import annotations
 
@@ -7,36 +7,17 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from .artifacts import (
+from fourda_pipeline.command import CommandRunner
+from fourda_pipeline.core import PassResult, PipelineContext
+
+from ..artifacts import (
     EXPERIMENT_WORKSPACE,
     INPUT_VIDEO,
     MODEL_CACHE,
     experiment_artifact,
 )
-from fourda_pipeline.command import CommandRunner
-from fourda_pipeline.core import PassResult, PipelineContext
-
-from .config import FourDAnyoneConfig
-from .runner import PROGRESS_PREFIX
-
-
-class PrepareExperimentPass:
-    id = "prepare-experiment"
-    name = "Prepare experiment workspace"
-    requires = frozenset()
-    provides = frozenset({EXPERIMENT_WORKSPACE})
-
-    def __init__(self, config: FourDAnyoneConfig) -> None:
-        self.config = config
-
-    def run(self, context: PipelineContext) -> PassResult:
-        self.config.experiment_dir.mkdir(parents=True, exist_ok=True)
-        config_path = self.config.experiment_dir / "pipeline-config.json"
-        self.config.write_json(config_path)
-        return PassResult(
-            artifacts={EXPERIMENT_WORKSPACE: self.config.experiment_dir},
-            details={"path": str(self.config.experiment_dir)},
-        )
+from ..config import FourDAnyoneConfig
+from ..runner import PROGRESS_PREFIX
 
 
 class FourDAnyoneInferencePass:

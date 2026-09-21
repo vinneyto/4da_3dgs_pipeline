@@ -1,4 +1,4 @@
-"""Rerun recording artifact pass."""
+"""Build a Rerun recording from a recovered 4DAnyone experiment."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from fourda_4danyone.artifacts import (
 from fourda_4danyone.config import FourDAnyoneConfig
 from fourda_pipeline.core import PassResult, PipelineContext
 
-from .exporter import RerunExporter
+from ..exporter import RerunExporter
 
 
 RERUN_RECORDING = "dataset.rerun"

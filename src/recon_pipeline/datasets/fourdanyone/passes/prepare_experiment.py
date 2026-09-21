@@ -15,6 +15,11 @@ class PrepareExperimentPass:
     def __init__(self, config: FourDAnyoneConfig) -> None:
         self.config = config
 
+    def cleanup(self, context: PipelineContext) -> None:
+        config_path = self.config.experiment_dir / "pipeline-config.json"
+        if config_path.exists():
+            config_path.unlink()
+
     def run(self, context: PipelineContext) -> PassResult:
         self.config.experiment_dir.mkdir(parents=True, exist_ok=True)
         config_path = self.config.experiment_dir / "pipeline-config.json"

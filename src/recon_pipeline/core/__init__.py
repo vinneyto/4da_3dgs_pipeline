@@ -11,6 +11,9 @@ from .pipeline import (
     PipelineOutcome,
     PipelinePass,
     QueuedPipelineObserver,
+    JsonPassCheckpointStore,
+    PassCheckpoint,
+    PassCheckpointStore,
 )
 
 __all__ = [
@@ -24,4 +27,7 @@ __all__ = [
     "PipelineOutcome",
     "PipelinePass",
     "QueuedPipelineObserver",
+    "JsonPassCheckpointStore",
+    "PassCheckpoint",
+    "PassCheckpointStore",
 ]

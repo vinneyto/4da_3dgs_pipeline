@@ -7,6 +7,7 @@ import os
 import signal
 import subprocess
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -29,14 +30,34 @@ class AwsBackgroundJob:
         self.status_path = self.root / "status.json"
         self.log_path = self.root / "pipeline.log"
 
+    def _archive_previous_attempt(self) -> None:
+        timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
+        destination = self.root / "attempts" / timestamp
+        destination.mkdir(parents=True, exist_ok=False)
+        for path in (self.request_path, self.status_path, self.log_path):
+            if path.exists():
+                path.replace(destination / path.name)
+
+    @staticmethod
+    def _process_is_running(pid: int | None) -> bool:
+        if not pid:
+            return False
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
+
     def start(self, request: dict[str, Any]) -> JobStatus:
         if self.status_path.is_file():
             existing = JobStatus.read(self.status_path)
-            if not existing.terminal:
+            if not existing.terminal and self._process_is_running(existing.pid):
                 raise RuntimeError(f"job already exists and is {existing.state}: {self.job_id}")
-            raise FileExistsError(f"job directory already exists: {self.root}")
+            self._archive_previous_attempt()
 
-        self.root.mkdir(parents=True, exist_ok=False)
+        self.root.mkdir(parents=True, exist_ok=True)
         self.request_path.write_text(json.dumps(request, indent=2, sort_keys=True) + "\n")
         status = JobStatus(job_id=self.job_id)
         status.write(self.status_path)

@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 import pytest
 
 from recon_pipeline.core import (
+    JsonPassCheckpointStore,
     PassResult,
     Pipeline,
     PipelineContext,
@@ -15,6 +16,7 @@ from recon_pipeline.core.events import (
     FinalizerFailed,
     PassCompleted,
     PassFailed,
+    PassSkipped,
     PipelineFinalized,
 )
 
@@ -26,7 +28,11 @@ class FakePass:
     requires: frozenset[str] = frozenset()
     provides: frozenset[str] = frozenset()
     calls: list[str] = field(default_factory=list)
+    cleanup_calls: list[str] = field(default_factory=list)
     fail: bool = False
+
+    def cleanup(self, context: PipelineContext) -> None:
+        self.cleanup_calls.append(self.id)
 
     def run(self, context: PipelineContext) -> PassResult:
         self.calls.append(self.id)
@@ -144,3 +150,172 @@ def test_observer_failure_is_non_critical() -> None:
 
     assert outcome.succeeded is True
     assert observer.closed is True
+
+
+def checkpoint_store(tmp_path) -> JsonPassCheckpointStore:
+    return JsonPassCheckpointStore(tmp_path / "pass-state.json", "experiment")
+
+
+def test_retry_starts_at_first_incomplete_pass_and_cleans_rerun_suffix(
+    tmp_path,
+) -> None:
+    store = checkpoint_store(tmp_path)
+    first_calls: list[str] = []
+    first = FakePass("first", "First", provides=frozenset({"one"}), calls=first_calls)
+    broken = FakePass(
+        "broken",
+        "Broken",
+        requires=frozenset({"one"}),
+        provides=frozenset({"two"}),
+        calls=first_calls,
+        fail=True,
+    )
+    after = FakePass(
+        "after",
+        "After",
+        requires=frozenset({"two"}),
+        provides=frozenset({"three"}),
+        calls=first_calls,
+    )
+
+    with pytest.raises(RuntimeError, match="broken failed"):
+        Pipeline([first, broken, after], checkpoint_store=store).run()
+
+    assert list(store.load()) == ["first"]
+    assert first_calls == ["first", "broken"]
+
+    retry_calls: list[str] = []
+    retry_first = FakePass(
+        "first", "First", provides=frozenset({"one"}), calls=retry_calls
+    )
+    retry_broken = FakePass(
+        "broken",
+        "Broken",
+        requires=frozenset({"one"}),
+        provides=frozenset({"two"}),
+        calls=retry_calls,
+    )
+    retry_after = FakePass(
+        "after",
+        "After",
+        requires=frozenset({"two"}),
+        provides=frozenset({"three"}),
+        calls=retry_calls,
+    )
+    context = PipelineContext()
+
+    Pipeline(
+        [retry_first, retry_broken, retry_after], checkpoint_store=store
+    ).run(context)
+
+    assert retry_calls == ["broken", "after"]
+    assert retry_first.cleanup_calls == []
+    assert retry_broken.cleanup_calls == ["broken"]
+    assert retry_after.cleanup_calls == ["after"]
+    assert context.artifacts == {
+        "one": "first:one",
+        "two": "broken:two",
+        "three": "after:three",
+    }
+
+
+def test_inserted_pass_invalidates_every_later_checkpoint(tmp_path) -> None:
+    store = checkpoint_store(tmp_path)
+    Pipeline(
+        [
+            FakePass("first", "First", provides=frozenset({"one"})),
+            FakePass(
+                "last",
+                "Last",
+                requires=frozenset({"one"}),
+                provides=frozenset({"last"}),
+            ),
+        ],
+        checkpoint_store=store,
+    ).run()
+
+    calls: list[str] = []
+    observer = RecordingObserver()
+    passes = [
+        FakePass("first", "First", provides=frozenset({"one"}), calls=calls),
+        FakePass(
+            "inserted",
+            "Inserted",
+            requires=frozenset({"one"}),
+            provides=frozenset({"middle"}),
+            calls=calls,
+        ),
+        FakePass(
+            "last",
+            "Last",
+            requires=frozenset({"middle"}),
+            provides=frozenset({"last"}),
+            calls=calls,
+        ),
+    ]
+
+    Pipeline(passes, checkpoint_store=store, observers=[observer]).run()
+
+    assert calls == ["inserted", "last"]
+    assert list(store.load()) == ["first", "inserted", "last"]
+    skipped = [event for event in observer.events if isinstance(event, PassSkipped)]
+    assert [event.pass_id for event in skipped] == ["first"]
+
+
+def test_removed_pass_invalidates_every_later_checkpoint(tmp_path) -> None:
+    store = checkpoint_store(tmp_path)
+    Pipeline(
+        [
+            FakePass("first", "First", provides=frozenset({"one"})),
+            FakePass(
+                "removed",
+                "Removed",
+                requires=frozenset({"one"}),
+                provides=frozenset({"middle"}),
+            ),
+            FakePass(
+                "last",
+                "Last",
+                requires=frozenset({"middle"}),
+                provides=frozenset({"last"}),
+            ),
+        ],
+        checkpoint_store=store,
+    ).run()
+
+    calls: list[str] = []
+    Pipeline(
+        [
+            FakePass("first", "First", provides=frozenset({"one"}), calls=calls),
+            FakePass(
+                "last",
+                "Last",
+                requires=frozenset({"one"}),
+                provides=frozenset({"last"}),
+                calls=calls,
+            ),
+        ],
+        checkpoint_store=store,
+    ).run()
+
+    assert calls == ["last"]
+    assert list(store.load()) == ["first", "last"]
+
+
+def test_completed_pipeline_skips_every_pass_unless_forced(tmp_path) -> None:
+    store = checkpoint_store(tmp_path)
+    original_calls: list[str] = []
+    original = FakePass("only", "Only", calls=original_calls)
+    Pipeline([original], checkpoint_store=store).run()
+
+    skipped_calls: list[str] = []
+    skipped = FakePass("only", "Only", calls=skipped_calls)
+    Pipeline([skipped], checkpoint_store=store).run()
+    assert skipped_calls == []
+    assert skipped.cleanup_calls == []
+
+    forced_calls: list[str] = []
+    forced = FakePass("only", "Only", calls=forced_calls)
+    Pipeline([forced], checkpoint_store=store, force=True).run()
+    assert forced_calls == ["only"]
+    assert forced.cleanup_calls == ["only"]

@@ -15,6 +15,7 @@ from .core import (
     PipelinePass,
     QueuedPipelineObserver,
 )
+from .checkpoints import JsonPassCheckpointStore, PassCheckpoint, PassCheckpointStore
 
 __all__ = [
     "ExecutionPlan",
@@ -27,4 +28,7 @@ __all__ = [
     "PipelineOutcome",
     "PipelinePass",
     "QueuedPipelineObserver",
+    "JsonPassCheckpointStore",
+    "PassCheckpoint",
+    "PassCheckpointStore",
 ]

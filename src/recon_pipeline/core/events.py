@@ -20,6 +20,15 @@ class PassStarted:
 
 
 @dataclass(frozen=True, slots=True)
+class PassSkipped:
+    pass_id: str
+    pass_name: str
+    pass_index: int
+    pass_count: int
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
 class PassProgress:
     pass_id: str
     pass_name: str
@@ -93,6 +102,7 @@ class PipelineFinalized:
 PipelineEvent = (
     PipelineStarted
     | PassStarted
+    | PassSkipped
     | PassProgress
     | PassCompleted
     | PassFailed

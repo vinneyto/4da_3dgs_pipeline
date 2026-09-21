@@ -48,6 +48,9 @@ class FakeClient:
     def delete_object(self, **kwargs):
         self._record("delete_object", kwargs)
 
+    def delete_objects(self, **kwargs):
+        self._record("delete_objects", kwargs)
+
     def create_topic(self, **kwargs):
         self._record("create_topic", kwargs)
         return {"TopicArn": "arn:aws:sns:us-east-1:123:fourda"}
@@ -288,3 +291,26 @@ def test_worker_restores_prior_experiment_for_artifact_only_run(
     assert (found, downloaded) == (2, 2)
     assert (destination / "4danyone/metadata.json").read_bytes() == b"data"
     assert (destination / "4danyone/cameras.json").read_bytes() == b"data"
+
+
+def test_worker_deletes_only_one_experiment_result_prefix(
+    monkeypatch, tmp_path
+) -> None:
+    fake = FakeBoto3()
+    fake.clients["s3"] = FakeExperimentS3("s3")
+    monkeypatch.setattr(aws, "_boto3", lambda: fake)
+    config = make_config(tmp_path)
+
+    deleted = aws.delete_experiment_results(config, "leo")
+
+    assert deleted == 2
+    delete_call = [
+        arguments
+        for name, arguments in fake.clients["s3"].calls
+        if name == "delete_objects"
+    ][0]
+    assert delete_call["Bucket"] == "fourda-test"
+    assert delete_call["Delete"]["Objects"] == [
+        {"Key": "runs/leo/4danyone/metadata.json"},
+        {"Key": "runs/leo/4danyone/cameras.json"},
+    ]

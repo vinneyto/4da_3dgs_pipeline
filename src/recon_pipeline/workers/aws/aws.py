@@ -388,6 +388,30 @@ def experiment_s3_uri(config: AwsWorkerConfig, experiment_name: str) -> str:
     return f"s3://{config.bucket_name}/{key}/"
 
 
+def delete_experiment_results(
+    config: AwsWorkerConfig, experiment_name: str
+) -> int:
+    """Delete objects owned by one experiment result prefix."""
+    client = _boto3().client("s3", region_name=config.region)
+    prefix = "/".join(
+        part for part in (config.runs_prefix, experiment_name) if part
+    ).rstrip("/") + "/"
+    paginator = client.get_paginator("list_objects_v2")
+    deleted = 0
+    for page in paginator.paginate(Bucket=config.bucket_name, Prefix=prefix):
+        objects = [{"Key": item["Key"]} for item in page.get("Contents", [])]
+        for offset in range(0, len(objects), 1000):
+            batch = objects[offset : offset + 1000]
+            if not batch:
+                continue
+            client.delete_objects(
+                Bucket=config.bucket_name,
+                Delete={"Objects": batch, "Quiet": True},
+            )
+            deleted += len(batch)
+    return deleted
+
+
 def upload_directory(config: AwsWorkerConfig, source: Path, experiment_name: str) -> str:
     client = _boto3().client("s3", region_name=config.region)
     prefix = "/".join(part for part in (config.runs_prefix, experiment_name) if part)

@@ -21,6 +21,11 @@ class WriteRunManifestPass:
     def __init__(self, config: FourDAnyoneConfig) -> None:
         self.config = config
 
+    def cleanup(self, context: PipelineContext) -> None:
+        path = self.config.experiment_dir / "pipeline-result.json"
+        if path.exists():
+            path.unlink()
+
     def run(self, context: PipelineContext) -> PassResult:
         durations = dict(context.values.get("pass_durations", {}))
         result = {

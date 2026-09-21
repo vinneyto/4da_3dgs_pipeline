@@ -9,10 +9,10 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import urlparse
 
-from fourda_pipeline.config import FourDAnyoneConfig, extract_4danyone_dataset_config
+from fourda_4danyone.config import FourDAnyoneConfig, extract_4danyone_dataset_config
 
 
-VALID_SHUTDOWN_POLICIES = frozenset({"never", "success", "always"})
+VALID_SHUTDOWN_POLICIES = frozenset({"never", "success", "failure", "always"})
 SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5, 6})
 
 

@@ -3,7 +3,16 @@ from pathlib import Path
 
 def test_core_package_has_no_aws_dependency() -> None:
     core = Path(__file__).parents[1] / "src/fourda_pipeline"
-    forbidden = ("boto3", "fourda_aws_worker", "sagemaker", "sns", "s3://")
+    forbidden = (
+        "boto3",
+        "fourda_aws_worker",
+        "fourda_4danyone",
+        "fourda_nerfstudio",
+        "fourda_rerun",
+        "sagemaker",
+        "sns",
+        "s3://",
+    )
     for path in core.glob("*.py"):
         source = path.read_text().lower()
         for token in forbidden:
@@ -13,10 +22,21 @@ def test_core_package_has_no_aws_dependency() -> None:
 def test_aws_worker_is_a_separate_package() -> None:
     source_root = Path(__file__).parents[1] / "src"
     assert (source_root / "fourda_pipeline/pipeline.py").is_file()
+    assert (source_root / "fourda_pipeline/events.py").is_file()
+    assert (source_root / "fourda_4danyone/passes.py").is_file()
     assert (source_root / "fourda_aws_worker/worker.py").is_file()
     assert not (source_root / "fourda_pipeline/worker.py").exists()
     assert (source_root / "fourda_nerfstudio/config.py").is_file()
+    assert (source_root / "fourda_nerfstudio/passes.py").is_file()
     assert (source_root / "fourda_rerun/exporter.py").is_file()
-    for package in ("fourda_nerfstudio", "fourda_rerun"):
+    assert (source_root / "fourda_rerun/passes.py").is_file()
+    for package in ("fourda_4danyone", "fourda_nerfstudio", "fourda_rerun"):
         for path in (source_root / package).glob("*.py"):
             assert "boto3" not in path.read_text().lower()
+
+
+def test_only_aws_worker_exposes_a_pipeline_cli() -> None:
+    project = Path(__file__).parents[1]
+    pyproject = (project / "pyproject.toml").read_text()
+    assert "fourda-aws-worker" in pyproject
+    assert 'fourda-pipeline = ' not in pyproject

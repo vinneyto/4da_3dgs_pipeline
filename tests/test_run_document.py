@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 from fourda_aws_worker.config import load_aws_worker_config
-from fourda_pipeline.config import load_pipeline_config
+from fourda_4danyone.config import load_pipeline_config
 
 
 def document(tmp_path: Path) -> dict:

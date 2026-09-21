@@ -1,7 +1,5 @@
-"""4DAnyone to 3DGS orchestration."""
+"""Cloud-independent synchronous pass pipeline."""
 
-from .config import FourDAnyoneConfig
-from .pipeline import FourDAnyonePipeline
+from .pipeline import Pipeline, PipelineContext, PipelineObserver
 
-__all__ = ["FourDAnyoneConfig", "FourDAnyonePipeline"]
-
+__all__ = ["Pipeline", "PipelineContext", "PipelineObserver"]

@@ -1,0 +1,65 @@
+"""Rerun recording artifact pass."""
+
+from __future__ import annotations
+
+from fourda_4danyone.artifacts import (
+    EXPERIMENT_WORKSPACE,
+    MODEL_CACHE,
+    experiment_artifact,
+)
+from fourda_4danyone.config import FourDAnyoneConfig
+from fourda_pipeline.core import PassResult, PipelineContext
+
+from .exporter import RerunExporter
+
+
+RERUN_RECORDING = "dataset.rerun"
+
+
+class RerunExportPass:
+    id = "rerun-export"
+    name = "Rerun dataset recording"
+    provides = frozenset({RERUN_RECORDING})
+
+    def __init__(self, config: FourDAnyoneConfig) -> None:
+        self.config = config
+        self.requires = frozenset(
+            {
+                EXPERIMENT_WORKSPACE,
+                MODEL_CACHE,
+                experiment_artifact(config.rerun_source_experiment_name),
+            }
+        )
+
+    def run(self, context: PipelineContext) -> PassResult:
+        path = self.config.rerun_path
+        if self.config.resume and path.is_file():
+            context.report_progress(1.0, "Reusing existing Rerun recording")
+        else:
+            if path.exists():
+                if self.config.rerun.replace_existing:
+                    path.unlink()
+                else:
+                    raise FileExistsError(
+                        f"Rerun output already exists: {path}; set "
+                        "artifacts.dataset.rerun.replace_existing=true to replace it"
+                    )
+
+            def progress(current: int, total: int, message: str) -> None:
+                context.report_progress(current / total, message)
+
+            context.report_progress(0.0, "Building camera and skeleton recording")
+            path = RerunExporter(
+                generation=self.config.rerun_generation_dir,
+                output=path,
+                experiment=self.config.experiment_name,
+                fourdanyone_root=self.config.fourdanyone_root,
+                model_dir=self.config.model_dir,
+                view_count=self.config.rerun.view_count,
+                device=self.config.rerun.device,
+                on_progress=progress,
+            ).export()
+        return PassResult(
+            artifacts={RERUN_RECORDING: path},
+            details={"path": str(path)},
+        )

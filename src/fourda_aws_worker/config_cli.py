@@ -143,7 +143,7 @@ def build_parser() -> argparse.ArgumentParser:
     aws.add_argument("--upload-results", action=argparse.BooleanOptionalAction, default=True)
     aws.add_argument(
         "--shutdown-on",
-        choices=("never", "success", "always"),
+        choices=("never", "success", "failure", "always"),
         default="never",
     )
 

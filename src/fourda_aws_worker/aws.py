@@ -273,8 +273,16 @@ def run_health_check(
 
 
 def publish_started(
-    config: AwsWorkerConfig, result: AwsHealthCheckResult, experiment_name: str
+    config: AwsWorkerConfig,
+    result: AwsHealthCheckResult,
+    experiment_name: str,
+    preflight_duration_seconds: float | None = None,
 ) -> dict[str, str]:
+    duration_line = (
+        f"AWS preflight duration: {preflight_duration_seconds:.1f}s"
+        if preflight_duration_seconds is not None
+        else "AWS preflight duration: unavailable"
+    )
     return publish_notification(
         config,
         f"4DAnyone AWS job started: {config.job_id}",
@@ -290,7 +298,8 @@ def publish_started(
                 f"Email notifications: {result.email_status}",
                 f"Telegram notifications: {result.telegram_status}",
                 f"SageMaker App: {result.sagemaker_app_status or 'shutdown disabled'}",
-                "Required inputs are staged. The configured tasks are starting now.",
+                duration_line,
+                "AWS preflight passed. The configured pipeline passes are starting now.",
             ]
         ),
     )

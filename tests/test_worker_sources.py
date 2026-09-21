@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from fourda_nerfstudio.config import NerfstudioArtifactConfig
-from fourda_pipeline.config import FourDAnyoneConfig
+from fourda_4danyone.config import FourDAnyoneConfig
 from fourda_rerun.config import RerunConfig
 from fourda_aws_worker.worker import required_source_experiments
 

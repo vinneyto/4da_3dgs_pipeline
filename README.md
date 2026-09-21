@@ -162,6 +162,32 @@ recon-aws-worker logs --config "$RECON_RUN_CONFIG" --lines 200
 recon-aws-worker logs --config "$RECON_RUN_CONFIG" --lines 200 --follow
 ```
 
+The worker checkpoints every successfully completed pass in the experiment's
+`.recon-pipeline/pass-state.json`. Running the same `start` command again:
+
+- archives the previous terminal job attempt and its log;
+- restores the longest unchanged prefix of completed passes;
+- starts at the first incomplete or newly inserted pass;
+- invalidates and reruns every pass after that boundary;
+- removes each rerun pass's owned output immediately before the pass starts.
+
+If every configured pass is complete, the worker skips all regular passes. It
+never starts a second process while the same job is still running.
+
+Ignore all checkpoints and rebuild the experiment from its first pass:
+
+```bash
+recon-aws-worker start --config "$RECON_RUN_CONFIG" --force
+```
+
+Use `--force` after changing parameters of an existing pass. Pass insertion,
+removal, or reordering is detected automatically from the ordered checkpoint
+sequence and invalidates that pass position and every later pass.
+
+No manual deletion of `runs/<experiment>` or `jobs/<job>` is required between
+attempts. `--force` does not delete shared model caches; cleanup is limited to
+outputs owned by the pass being rerun.
+
 ## Stop
 
 ```bash

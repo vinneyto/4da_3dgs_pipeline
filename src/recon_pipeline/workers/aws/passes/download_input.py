@@ -17,6 +17,14 @@ class S3DownloadInputPass:
     def __init__(self, worker: AwsWorkerConfig) -> None:
         self.worker = worker
 
+    def cleanup(self, context: PipelineContext) -> None:
+        path = self.worker.local_video_path
+        if path.exists():
+            path.unlink()
+        temporary = path.with_suffix(path.suffix + ".download")
+        if temporary.exists():
+            temporary.unlink()
+
     def run(self, context: PipelineContext) -> PassResult:
         context.report_progress(0.0, f"Downloading {self.worker.video_s3_uri}")
         path = download_input_video(self.worker)

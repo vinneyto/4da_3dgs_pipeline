@@ -6,7 +6,7 @@ import queue
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from .events import (
     FinalizerCompleted,
@@ -15,6 +15,7 @@ from .events import (
     PassCompleted,
     PassFailed,
     PassProgress,
+    PassSkipped,
     PassStarted,
     PipelineEvent,
     PipelineFailed,
@@ -22,6 +23,9 @@ from .events import (
     PipelineStarted,
     PipelineSucceeded,
 )
+
+if TYPE_CHECKING:
+    from .checkpoints import PassCheckpointStore
 
 
 ArtifactKey = str
@@ -61,6 +65,8 @@ class PipelinePass(Protocol):
     provides: frozenset[ArtifactKey]
 
     def run(self, context: PipelineContext) -> PassResult: ...
+
+    def cleanup(self, context: PipelineContext) -> None: ...
 
 
 class PipelineFinalizer(Protocol):
@@ -200,10 +206,45 @@ class Pipeline:
         *,
         finalizers: list[PipelineFinalizer] | None = None,
         observers: list[PipelineObserver] | None = None,
+        checkpoint_store: PassCheckpointStore | None = None,
+        force: bool = False,
     ) -> None:
         self.passes = list(passes)
         self.finalizers = list(finalizers or [])
         self.events = PipelineEventBus(observers)
+        self.checkpoint_store = checkpoint_store
+        self.force = force
+
+    def _restore_completed_prefix(
+        self, plan: ExecutionPlan, context: PipelineContext
+    ) -> int:
+        if self.checkpoint_store is None:
+            return 0
+        if self.force:
+            self.checkpoint_store.clear()
+            return 0
+
+        checkpoints = list(self.checkpoint_store.load().values())
+        completed_prefix: list[str] = []
+        for index, pipeline_pass in enumerate(plan.passes):
+            if index >= len(checkpoints):
+                self.checkpoint_store.retain(completed_prefix)
+                return index
+            checkpoint = checkpoints[index]
+            if checkpoint.pass_id != pipeline_pass.id:
+                self.checkpoint_store.retain(completed_prefix)
+                return index
+            if set(checkpoint.result.artifacts) != set(pipeline_pass.provides):
+                self.checkpoint_store.retain(completed_prefix)
+                return index
+            context.artifacts.update(checkpoint.result.artifacts)
+            context.pass_results[pipeline_pass.id] = checkpoint.result
+            context.values["pass_durations"][pipeline_pass.id] = (
+                checkpoint.duration_seconds
+            )
+            completed_prefix.append(pipeline_pass.id)
+        self.checkpoint_store.retain(completed_prefix)
+        return len(plan.passes)
 
     def prepare(
         self, initial_artifacts: set[ArtifactKey] | frozenset[ArtifactKey] = frozenset()
@@ -247,13 +288,29 @@ class Pipeline:
         pipeline_started = time.monotonic()
         context.values["pipeline_started_monotonic"] = pipeline_started
         context.values.setdefault("pass_durations", {})
+        start_index = self._restore_completed_prefix(plan, context)
+        context.values["resumed_at_pass_index"] = start_index
         outcome = PipelineOutcome(succeeded=False)
         self.events.start(context)
         self.events.publish(
-            PipelineStarted(tuple(item.name for item in plan.passes)), context
+            PipelineStarted(tuple(item.name for item in plan.passes[start_index:])),
+            context,
         )
+        for index, pipeline_pass in enumerate(plan.passes[:start_index]):
+            self.events.publish(
+                PassSkipped(
+                    pipeline_pass.id,
+                    pipeline_pass.name,
+                    index + 1,
+                    pass_count,
+                    "restored from durable checkpoint",
+                ),
+                context,
+            )
         try:
-            for index, pipeline_pass in enumerate(plan.passes):
+            for index, pipeline_pass in enumerate(
+                plan.passes[start_index:], start=start_index
+            ):
                 pass_index = index + 1
                 self.events.publish(
                     PassStarted(
@@ -281,6 +338,9 @@ class Pipeline:
 
                 context._progress_callback = report
                 try:
+                    cleanup = getattr(pipeline_pass, "cleanup", None)
+                    if cleanup is not None:
+                        cleanup(context)
                     result = pipeline_pass.run(context)
                     if not isinstance(result, PassResult):
                         raise TypeError(
@@ -295,6 +355,12 @@ class Pipeline:
                         )
                     context.artifacts.update(result.artifacts)
                     context.pass_results[pipeline_pass.id] = result
+                    duration = time.monotonic() - pass_started
+                    context.values["pass_durations"][pipeline_pass.id] = duration
+                    if self.checkpoint_store is not None:
+                        self.checkpoint_store.complete(
+                            pipeline_pass.id, result, duration
+                        )
                 except BaseException as error:
                     self.events.publish(
                         PassFailed(
@@ -313,8 +379,6 @@ class Pipeline:
                 next_name = (
                     plan.passes[index + 1].name if index + 1 < pass_count else None
                 )
-                duration = time.monotonic() - pass_started
-                context.values["pass_durations"][pipeline_pass.id] = duration
                 self.events.publish(
                     PassCompleted(
                         pipeline_pass.id,

@@ -15,6 +15,7 @@ from recon_pipeline.core.events import (
     PassCompleted,
     PassFailed,
     PassProgress,
+    PassSkipped,
     PassStarted,
     PipelineEvent,
     PipelineFailed,
@@ -61,6 +62,12 @@ class ConsoleObserver(PipelineObserver):
         elif isinstance(event, PassStarted):
             print(
                 f"[{event.pass_index}/{event.pass_count}] Starting {event.pass_name}",
+                flush=True,
+            )
+        elif isinstance(event, PassSkipped):
+            print(
+                f"[{event.pass_index}/{event.pass_count}] Skipping {event.pass_name}: "
+                f"{event.reason}",
                 flush=True,
             )
         elif isinstance(event, PassProgress):
@@ -113,6 +120,13 @@ class JobStatusObserver(PipelineObserver):
                 stage=event.pass_id,
                 progress=(event.pass_index - 1) / event.pass_count,
                 message=f"Starting {event.pass_name}",
+            )
+        elif isinstance(event, PassSkipped):
+            self._write(
+                state="running",
+                stage=event.pass_id,
+                progress=event.pass_index / event.pass_count,
+                message=f"Skipping completed {event.pass_name}",
             )
         elif isinstance(event, PassProgress):
             self._write(
@@ -206,7 +220,7 @@ class AwsNotificationObserver(QueuedPipelineObserver):
             passes = "\n".join(
                 f"{index}. {name}"
                 for index, name in enumerate(event.pass_names, start=1)
-            )
+            ) or "No passes pending; all checkpoints are complete"
             self._publish(
                 f"Pipeline started: {self.experiment_name}",
                 f"Experiment: {self.experiment_name}\nPasses:\n{passes}",

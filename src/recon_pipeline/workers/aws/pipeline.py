@@ -7,7 +7,7 @@ from pathlib import Path
 from recon_pipeline.datasets.fourdanyone.config import FourDAnyoneConfig
 from recon_pipeline.datasets.fourdanyone.passes import FourDAnyoneInferencePass, PrepareExperimentPass
 from recon_pipeline.reconstructions.nerfstudio.passes import NerfstudioExportPass
-from recon_pipeline.core import Pipeline
+from recon_pipeline.core import JsonPassCheckpointStore, Pipeline
 from recon_pipeline.artifacts.rerun.passes import RerunExportPass
 
 from .config import AwsWorkerConfig
@@ -53,6 +53,8 @@ def build_aws_pipeline(
     config: FourDAnyoneConfig,
     job_dir: Path,
     status: JobStatus,
+    *,
+    force: bool = False,
 ) -> Pipeline:
     passes = [AwsPreflightPass(worker, config)]
     if config.dataset_enabled:
@@ -83,4 +85,9 @@ def build_aws_pipeline(
         passes,
         finalizers=[SageMakerShutdownFinalizer(worker)],
         observers=observers,
+        checkpoint_store=JsonPassCheckpointStore(
+            config.experiment_dir / ".recon-pipeline/pass-state.json",
+            config.experiment_name,
+        ),
+        force=force,
     )

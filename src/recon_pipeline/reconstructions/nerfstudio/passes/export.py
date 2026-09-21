@@ -71,6 +71,12 @@ class NerfstudioExportPass:
                 "Missing required paths:\n" + "\n".join(f" - {item}" for item in missing)
             )
 
+    def cleanup(self, context: PipelineContext) -> None:
+        for frame in self.config.nerfstudio.frames:
+            destination = self.config.dataset_dir(frame)
+            if destination.exists():
+                shutil.rmtree(destination)
+
     def run(self, context: PipelineContext) -> PassResult:
         self._validate_inputs()
         datasets: list[dict[str, object]] = []
@@ -78,25 +84,14 @@ class NerfstudioExportPass:
         for offset, frame in enumerate(frames):
             destination = self.config.dataset_dir(frame)
             transforms = destination / "transforms.json"
-            if self.config.resume and transforms.is_file():
-                message = f"Reusing exported frame {frame}"
-            else:
-                if destination.exists():
-                    if self.config.nerfstudio.replace_existing:
-                        shutil.rmtree(destination)
-                    else:
-                        raise FileExistsError(
-                            f"dataset output already exists: {destination}; set "
-                            "artifacts.dataset.nerfstudio.replace_existing=true to replace it"
-                        )
-                self.runner.run(
-                    self.build_command(frame), cwd=self.config.fourdanyone_root
+            self.runner.run(
+                self.build_command(frame), cwd=self.config.fourdanyone_root
+            )
+            if not transforms.is_file():
+                raise RuntimeError(
+                    f"export completed without transforms.json: {destination}"
                 )
-                if not transforms.is_file():
-                    raise RuntimeError(
-                        f"export completed without transforms.json: {destination}"
-                    )
-                message = f"Exported synchronized frame {frame}"
+            message = f"Exported synchronized frame {frame}"
             context.report_progress((offset + 1) / len(frames), message)
             datasets.append({"frame": frame, "dataset_dir": str(destination)})
         return PassResult(

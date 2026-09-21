@@ -71,6 +71,12 @@ def build_parser() -> argparse.ArgumentParser:
     ):
         command = commands.add_parser(name, help=help_text)
         command.add_argument("--config", type=Path, required=True)
+        if name == "start":
+            command.add_argument(
+                "--force",
+                action="store_true",
+                help="Ignore all completed pass checkpoints and rerun from the beginning",
+            )
         if name == "status":
             command.add_argument("--json", action="store_true")
         if name == "logs":
@@ -118,6 +124,7 @@ def main() -> None:
             "pipeline": document["pipeline"],
             "artifacts": document.get("artifacts"),
             "aws_worker": config.to_dict(),
+            "force": args.force,
         }
         status = job.start(request)
         _print_status(status)

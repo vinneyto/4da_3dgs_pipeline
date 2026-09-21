@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 from pathlib import Path
 from typing import Any
@@ -92,30 +93,29 @@ class FourDAnyoneInferencePass:
                 f"model directory does not exist: {self.config.model_dir}"
             )
 
+    def cleanup(self, context: PipelineContext) -> None:
+        if self.config.inference_dir.exists():
+            shutil.rmtree(self.config.inference_dir)
+        request_path = self.config.experiment_dir / "inference-request.json"
+        if request_path.exists():
+            request_path.unlink()
+
     def run(self, context: PipelineContext) -> PassResult:
         self._validate_inputs()
         metadata = self.config.inference_dir / "metadata.json"
-        if self.config.resume and metadata.is_file():
-            context.report_progress(1.0, "Reusing completed 4DAnyone inference")
-        else:
-            if self.config.inference_dir.exists():
-                raise FileExistsError(
-                    f"inference output already exists: {self.config.inference_dir}; "
-                    "enable resume to reuse a completed inference"
-                )
-            request_path = self.config.experiment_dir / "inference-request.json"
-            request_path.write_text(
-                json.dumps(self._request(), indent=2, sort_keys=True) + "\n"
+        request_path = self.config.experiment_dir / "inference-request.json"
+        request_path.write_text(
+            json.dumps(self._request(), indent=2, sort_keys=True) + "\n"
+        )
+        self.runner.run(
+            self.build_command(request_path),
+            cwd=self.config.fourdanyone_root,
+            on_line=lambda line: self._handle_line(context, line),
+        )
+        if not metadata.is_file():
+            raise RuntimeError(
+                f"4DAnyone completed without expected metadata: {metadata}"
             )
-            self.runner.run(
-                self.build_command(request_path),
-                cwd=self.config.fourdanyone_root,
-                on_line=lambda line: self._handle_line(context, line),
-            )
-            if not metadata.is_file():
-                raise RuntimeError(
-                    f"4DAnyone completed without expected metadata: {metadata}"
-                )
         return PassResult(
             artifacts={
                 experiment_artifact(self.config.experiment_name): self.config.inference_dir

@@ -24,7 +24,13 @@ def run_worker(job_dir: Path) -> int:
     status.update(pid=os.getpid())
     status.write(status_path)
 
-    pipeline = build_aws_pipeline(worker, config, job_dir, status)
+    pipeline = build_aws_pipeline(
+        worker,
+        config,
+        job_dir,
+        status,
+        force=bool(request.get("force", False)),
+    )
     try:
         plan = pipeline.prepare()
     except BaseException as error:

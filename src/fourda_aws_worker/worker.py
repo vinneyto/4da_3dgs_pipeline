@@ -1,4 +1,4 @@
-"""Worker process for a durable AWS background job."""
+"""Worker process for a durable AWS pass pipeline."""
 
 from __future__ import annotations
 
@@ -8,265 +8,51 @@ import os
 import traceback
 from pathlib import Path
 
-from fourda_pipeline.config import FourDAnyoneConfig
-from fourda_pipeline.pipeline import FourDAnyonePipeline
-from fourda_pipeline.progress import ProgressUpdate
+from fourda_pipeline.core import PipelineContext, PipelineFinalizationError
 
-from .aws import (
-    download_input_video,
-    publish_completion,
-    publish_started,
-    publish_telegram,
-    run_health_check,
-    stop_sagemaker_app,
-    sync_experiment_results,
-    sync_model_objects,
-    upload_directory,
-)
 from .config import AwsWorkerConfig, materialize_pipeline_config
-from .monitoring import TelegramRuntimeMonitoring
+from .pipeline import build_aws_pipeline, required_source_experiments
 from .status import JobStatus, utc_now
-
-
-def required_source_experiments(
-    pipeline_config: FourDAnyoneConfig,
-) -> dict[str, Path]:
-    """Return prior runs that must be restored before artifact-only work."""
-    sources: dict[str, Path] = {}
-    if pipeline_config.nerfstudio.enabled and not (
-        pipeline_config.dataset_enabled
-        and pipeline_config.nerfstudio_source_experiment_name
-        == pipeline_config.experiment_name
-    ):
-        sources[
-            pipeline_config.nerfstudio_source_experiment_name
-        ] = pipeline_config.nerfstudio_source_experiment_dir
-    if pipeline_config.rerun.enabled and not (
-        pipeline_config.dataset_enabled
-        and pipeline_config.rerun_source_experiment_name
-        == pipeline_config.experiment_name
-    ):
-        sources[
-            pipeline_config.rerun_source_experiment_name
-        ] = pipeline_config.rerun_source_experiment_dir
-    return sources
-
-
-def _notification_text(
-    status: JobStatus,
-    config: AwsWorkerConfig,
-    result: dict | None,
-    input_s3_uri: str | None,
-    result_s3_uri: str | None,
-) -> str:
-    lines = [
-        f"4DAnyone AWS job: {status.job_id}",
-        f"State: {status.state}",
-        f"Message: {status.message}",
-    ]
-    if result:
-        lines.extend(
-            [
-                f"Experiment: {result['experiment_name']}",
-                f"S3 input: {input_s3_uri}",
-                f"Local result: {result['experiment_dir']}",
-                f"S3 result: {result_s3_uri or 'upload disabled'}",
-                f"Elapsed seconds: {result['elapsed_seconds']:.1f}",
-            ]
-        )
-    elif status.error:
-        lines.append(f"Error: {status.error}")
-    lines.append(f"Shutdown policy: {config.shutdown_on}")
-    return "\n".join(lines)
 
 
 def run_worker(job_dir: Path) -> int:
     request = json.loads((job_dir / "request.json").read_text())
-    aws_worker_config = AwsWorkerConfig.from_dict(request["aws_worker"])
-    pipeline_config = materialize_pipeline_config(request, aws_worker_config)
+    worker = AwsWorkerConfig.from_dict(request["aws_worker"])
+    config = materialize_pipeline_config(request, worker)
     status_path = job_dir / "status.json"
-    monitoring = TelegramRuntimeMonitoring(
-        aws_worker_config,
-        job_dir,
-        lambda subject, message: publish_telegram(
-            aws_worker_config, subject, message
-        ),
-    )
-    monitoring.start()
     status = JobStatus.read(status_path)
-    status.update(
-        state="running",
-        stage="validation",
-        message="AWS job worker is running",
-        pid=os.getpid(),
-        started_at=utc_now(),
-    )
+    status.update(pid=os.getpid())
     status.write(status_path)
 
-    def on_progress(update: ProgressUpdate) -> None:
-        # AWS validation/staging owns 0%-10%, the local core owns 10%-95%,
-        # and result upload owns 95%-100%.
-        fraction = 0.10 + update.fraction * 0.85
-        status.update(
-            state="running",
-            stage=update.stage,
-            progress=fraction,
-            message=update.message,
-        )
-        status.write(status_path)
-        print(f"[{fraction * 100:6.2f}%] {update.stage}: {update.message}", flush=True)
-
-    result: dict | None = None
-    input_s3_uri: str | None = aws_worker_config.video_s3_uri
-    result_s3_uri: str | None = None
-    exit_code = 0
+    pipeline = build_aws_pipeline(worker, config, job_dir, status)
     try:
-        status.update(
-            state="running",
-            stage="aws-health-check",
-            progress=0.0,
-            message="Validating AWS identity, S3, optional notifications, and SageMaker App",
-        )
-        status.write(status_path)
-        health = run_health_check(
-            aws_worker_config,
-            status.job_id,
-            require_input_video=pipeline_config.dataset_enabled,
-        )
-        print(
-            "AWS health check passed: "
-            f"caller={health.caller_arn}, bucket={health.bucket}, "
-            f"email={health.email_status}, telegram={health.telegram_status}",
-            flush=True,
-        )
-        if pipeline_config.dataset_enabled:
-            status.update(
-                state="running",
-                stage="input-download",
-                progress=0.02,
-                message=f"Downloading input video from {aws_worker_config.video_s3_uri}",
-            )
-            status.write(status_path)
-            video_path = download_input_video(aws_worker_config)
-            print(f"Input video ready at {video_path}", flush=True)
-        else:
-            print("Dataset stage disabled; input video download skipped", flush=True)
-
-        status.update(
-            state="running",
-            stage="model-sync",
-            progress=0.06,
-            message=(
-                "Synchronizing models from "
-                f"s3://{aws_worker_config.bucket_name}/{aws_worker_config.models_prefix}/"
-            ),
-        )
-        status.write(status_path)
-        model_count, downloaded_count = sync_model_objects(aws_worker_config)
-        print(
-            f"Model cache ready: {model_count} S3 objects, {downloaded_count} downloaded",
-            flush=True,
-        )
-
-        for source_experiment_name, source_experiment_dir in required_source_experiments(
-            pipeline_config
-        ).items():
-            generation_dir = source_experiment_dir / "4danyone"
-            if all(
-                (generation_dir / filename).is_file()
-                for filename in ("metadata.json", "cameras.json")
-            ):
-                continue
-            status.update(
-                state="running",
-                stage="source-sync",
-                progress=0.08,
-                message=(
-                    "Restoring source experiment "
-                    f"{source_experiment_name} from S3"
-                ),
-            )
-            status.write(status_path)
-            source_count, source_downloaded = sync_experiment_results(
-                aws_worker_config,
-                source_experiment_name,
-                source_experiment_dir,
-            )
-            print(
-                f"Source experiment ready: {source_count} S3 objects, "
-                f"{source_downloaded} downloaded",
-                flush=True,
-            )
-
-        pipeline_config.validate_paths()
-        notification_results = publish_started(
-            aws_worker_config, health, pipeline_config.experiment_name
-        )
-        print(f"Start notifications: {notification_results or 'disabled'}", flush=True)
-
-        result = FourDAnyonePipeline(pipeline_config, on_progress=on_progress).run()
-
-        if aws_worker_config.upload_results:
-            status.update(
-                state="running",
-                stage="result-upload",
-                progress=0.96,
-                message=f"Uploading result to s3://{aws_worker_config.bucket_name}",
-            )
-            status.write(status_path)
-            result_s3_uri = upload_directory(
-                aws_worker_config,
-                pipeline_config.experiment_dir,
-                pipeline_config.experiment_name,
-            )
-            print(f"Uploaded result to {result_s3_uri}", flush=True)
-
-        status.update(
-            state="succeeded",
-            stage="complete",
-            progress=1.0,
-            message="AWS job completed successfully",
-            finished_at=utc_now(),
-            result_path=str(pipeline_config.experiment_dir / "pipeline-result.json"),
-        )
+        plan = pipeline.prepare()
     except BaseException as error:
-        exit_code = 1
-        traceback.print_exc()
         status.update(
             state="failed",
-            stage="failed",
-            message=f"AWS job failed: {error}",
+            stage="planning",
+            message=f"Pipeline preparation failed: {error}",
             error=repr(error),
             finished_at=utc_now(),
         )
-    finally:
         status.write(status_path)
+        traceback.print_exc()
+        return 1
+    print("Prepared pipeline:", flush=True)
+    for index, pipeline_pass in enumerate(plan.passes, start=1):
+        print(f"  {index}. {pipeline_pass.id} — {pipeline_pass.name}", flush=True)
+    for finalizer in plan.finalizers:
+        print(f"  finalizer: {finalizer.id} — {finalizer.name}", flush=True)
 
     try:
-        notification_results = publish_completion(
-            aws_worker_config,
-            f"4DAnyone AWS job {status.state}: {status.job_id}",
-            _notification_text(status, aws_worker_config, result, input_s3_uri, result_s3_uri),
-        )
-        print(f"Completion notifications: {notification_results or 'disabled'}", flush=True)
-    except Exception:
-        print("Completion notification dispatch failed:", flush=True)
+        pipeline.run(PipelineContext())
+    except PipelineFinalizationError:
         traceback.print_exc()
-
-    monitoring.stop()
-
-    should_stop = aws_worker_config.shutdown_on == "always" or (
-        aws_worker_config.shutdown_on == "success" and status.state == "succeeded"
-    )
-    if should_stop:
-        try:
-            print("Requesting SageMaker JupyterLab App shutdown", flush=True)
-            stop_sagemaker_app(aws_worker_config.region, aws_worker_config.sagemaker)
-        except Exception:
-            print("SageMaker App shutdown request failed:", flush=True)
-            traceback.print_exc()
-            return 2 if exit_code == 0 else exit_code
-    return exit_code
+        return 2
+    except BaseException:
+        traceback.print_exc()
+        return 1
+    return 0
 
 
 def main() -> None:

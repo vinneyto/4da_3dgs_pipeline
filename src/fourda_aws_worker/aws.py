@@ -54,7 +54,13 @@ def topic_arn(config: AwsWorkerConfig) -> str:
     )["TopicArn"]
 
 
-def _telegram_request(config: AwsWorkerConfig, method: str, payload: dict[str, str]) -> Any:
+def _telegram_request(
+    config: AwsWorkerConfig,
+    method: str,
+    payload: dict[str, Any],
+    *,
+    request_timeout: float = 15,
+) -> Any:
     if config.telegram is None:
         raise ValueError("Telegram notifications are not configured")
     token = config.telegram.resolve_bot_token()
@@ -65,7 +71,7 @@ def _telegram_request(config: AwsWorkerConfig, method: str, payload: dict[str, s
         method="POST",
     )
     try:
-        with urlopen(request, timeout=15) as response:
+        with urlopen(request, timeout=request_timeout) as response:
             result = json.loads(response.read())
     except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as error:
         # Do not chain urllib exceptions: their URL contains the secret bot token.
@@ -100,6 +106,27 @@ def publish_telegram(config: AwsWorkerConfig, subject: str, message: str) -> Non
     if config.telegram is None or not config.telegram.enabled:
         raise ValueError("Telegram notifications are not enabled")
     _publish_telegram(config, subject, message)
+
+
+def get_telegram_updates(
+    config: AwsWorkerConfig,
+    offset: int | None,
+    timeout_seconds: int,
+) -> list[dict[str, Any]]:
+    """Long-poll bot commands without exposing the bot token to callers."""
+    payload: dict[str, Any] = {
+        "timeout": str(timeout_seconds),
+        "allowed_updates": json.dumps(["message"]),
+    }
+    if offset is not None:
+        payload["offset"] = str(offset)
+    result = _telegram_request(
+        config,
+        "getUpdates",
+        payload,
+        request_timeout=max(timeout_seconds + 5, 15),
+    )
+    return list(result or [])
 
 
 def publish_notification(config: AwsWorkerConfig, subject: str, message: str) -> dict[str, str]:
@@ -273,8 +300,16 @@ def run_health_check(
 
 
 def publish_started(
-    config: AwsWorkerConfig, result: AwsHealthCheckResult, experiment_name: str
+    config: AwsWorkerConfig,
+    result: AwsHealthCheckResult,
+    experiment_name: str,
+    preflight_duration_seconds: float | None = None,
 ) -> dict[str, str]:
+    duration_line = (
+        f"AWS preflight duration: {preflight_duration_seconds:.1f}s"
+        if preflight_duration_seconds is not None
+        else "AWS preflight duration: unavailable"
+    )
     return publish_notification(
         config,
         f"4DAnyone AWS job started: {config.job_id}",
@@ -290,7 +325,8 @@ def publish_started(
                 f"Email notifications: {result.email_status}",
                 f"Telegram notifications: {result.telegram_status}",
                 f"SageMaker App: {result.sagemaker_app_status or 'shutdown disabled'}",
-                "Required inputs are staged. The configured tasks are starting now.",
+                duration_line,
+                "AWS preflight passed. The configured pipeline passes are starting now.",
             ]
         ),
     )

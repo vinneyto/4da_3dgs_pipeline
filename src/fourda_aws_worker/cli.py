@@ -11,6 +11,7 @@ from pathlib import Path
 from .aws import configure_email
 from .config import AwsWorkerConfig, load_aws_worker_config, load_document
 from .job import AwsBackgroundJob
+from .pipeline import build_aws_pipeline
 from .status import JobStatus
 
 
@@ -62,6 +63,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     for name, help_text in (
         ("configure-email", "Create the configured SNS topic and email subscription"),
+        ("plan", "Print the ordered pass plan without calling AWS"),
         ("start", "Start a detached AWS background job"),
         ("status", "Show durable AWS job state"),
         ("logs", "Show or follow AWS job output"),
@@ -84,6 +86,26 @@ def main() -> None:
         result = configure_email(config)
         print(json.dumps(result, indent=2, sort_keys=True))
         print("Confirm the AWS Subscription Confirmation email before relying on notifications.")
+        return
+
+    if args.command == "plan":
+        pipeline_config, config = load_aws_worker_config(args.config)
+        job = AwsBackgroundJob(config.job_id, config.jobs_dir)
+        pipeline = build_aws_pipeline(
+            config,
+            pipeline_config,
+            job.root,
+            JobStatus(job_id=config.job_id),
+        )
+        plan = pipeline.prepare()
+        for index, pipeline_pass in enumerate(plan.passes, start=1):
+            requires = ", ".join(sorted(pipeline_pass.requires)) or "-"
+            provides = ", ".join(sorted(pipeline_pass.provides)) or "-"
+            print(f"{index}. {pipeline_pass.id} — {pipeline_pass.name}")
+            print(f"   requires: {requires}")
+            print(f"   provides: {provides}")
+        for finalizer in plan.finalizers:
+            print(f"finalizer. {finalizer.id} — {finalizer.name}")
         return
 
     job, config = _job_from_config(args.config)

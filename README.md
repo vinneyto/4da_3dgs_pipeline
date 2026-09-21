@@ -4,24 +4,36 @@ Reproducible [4DAnyone](https://github.com/ant-research/4DAnyone) inference and 
 
 ## Architecture
 
-The repository deliberately separates the local pipeline from AWS orchestration.
+The repository separates the synchronous pipeline core, domain pass providers,
+and AWS composition root.
 
 | Component | Responsibility | AWS dependency |
 |---|---|---|
-| `FourDAnyonePipeline` | 4DAnyone inference plus independently enabled local artifacts | None |
-| `fourda-pipeline` | Blocking local CLI around `FourDAnyonePipeline` | None |
+| `fourda_pipeline.Pipeline` | Ordered pass execution, artifact validation, events, observers, and guaranteed finalizers | None |
+| `fourda_4danyone` | 4DAnyone workspace and inference passes | None |
+| `fourda_nerfstudio` / `fourda_rerun` | Independent artifact passes | None |
 | `fourda-aws-worker` | AWS-specific detached execution, durable job status, S3 staging/result upload, optional email/Telegram notifications, SageMaker App shutdown | Optional `[aws]` extra |
 
-`fourda-pipeline` never imports `boto3`, reads environment variables, uploads files, or calls an AWS API. The same core can run on a workstation, another cloud provider, or inside a future managed SageMaker Job.
+The core never imports `boto3`, reads environment variables, uploads files, or
+calls an AWS API. Passes run synchronously in an explicit order. Observers react
+to lifecycle events for console output, durable status, Telegram/email, and
+resource monitoring, but they never schedule the next pass. Finalizers always
+run after success or failure.
 
 The source tree mirrors this boundary:
 
 ```text
-src/fourda_pipeline/   # cloud-independent pipeline and blocking CLI
-src/fourda_nerfstudio/ # static synchronized-frame artifact configuration
-src/fourda_rerun/      # interactive recording artifact
-src/fourda_aws_worker/ # AWS worker, background jobs, S3, SNS, and SageMaker
+src/fourda_pipeline/   # cloud-independent Pipeline, pass contracts, events
+src/fourda_4danyone/passes/   # one module per 4DAnyone pass
+src/fourda_nerfstudio/passes/ # one module per synchronized-frame artifact pass
+src/fourda_rerun/passes/      # one module per recording artifact pass
+src/fourda_aws_worker/passes/ # one module per AWS staging/persistence pass
+src/fourda_aws_worker/finalizers/ # AWS finalizers, separate from ordinary passes
 ```
+
+Every concrete pass lives in its own module. Each package re-exports its pass classes
+through `passes/__init__.py`, so composition roots depend on a stable public package
+surface instead of implementation file names.
 
 `fourda-aws-worker` is currently a console-based worker that simulates a future managed SageMaker Job. It runs the core pipeline as a detached job inside a JupyterLab App and owns every AWS-side effect. A future RunPod or local worker can be added as another package without modifying `fourda_pipeline`.
 
@@ -45,10 +57,9 @@ For an AWS run, `pipeline` deliberately contains no filesystem paths. The worker
 downloads the required S3 data, and constructs the complete
 `FourDAnyoneConfig` immediately before execution.
 
-The AWS example is not directly accepted by `fourda-pipeline`, because that blocking,
-cloud-independent CLI does not download S3 inputs. A completely local run document may
-omit `environment` and `aws_worker`, but its `pipeline` object must explicitly provide
-`video_path`, `fourdanyone_root`, `model_dir`, and `runs_dir`.
+The run document is currently assembled only by `fourda-aws-worker`. A local or
+RunPod composition root can later reuse the same core and domain passes without
+bringing in AWS dependencies.
 
 All filesystem paths must be absolute. This makes a run document self-contained and prevents hidden differences between shells, `.bashrc` files, notebooks, and background workers.
 
@@ -133,17 +144,8 @@ This remains the one-time model installation step. At job startup the worker als
 objects under `aws_worker.models_prefix`, but it reuses matching files on the persistent
 EBS volume and does not reinstall Python dependencies or recreate external checkpoints.
 
-## Blocking local run
-
-```bash
-cp config/local-run.example.json config/local-run.json
-# Edit all absolute paths.
-fourda-pipeline --config config/local-run.json
-```
-
-`config/local-run.json` must contain the complete local paths described above. This command
-performs no AWS operations. With `artifacts.dataset.nerfstudio.enabled=true`, it writes
-each selected synchronized moment to:
+With `artifacts.dataset.nerfstudio.enabled=true`, the Nerfstudio pass writes each
+selected synchronized moment to:
 
 ```text
 <pipeline.runs_dir>/<pipeline.experiment_name>/nerfstudio/frame_060/
@@ -231,19 +233,28 @@ fourda-aws-worker logs --config config/run.json --follow
 fourda-aws-worker stop --config config/run.json
 ```
 
-The job layer:
+Inspect the exact ordered plan and its artifact contracts without calling AWS:
 
-1. runs a fail-closed AWS health check before expensive GPU work;
-2. downloads the configured bucket video into `<data_root>/input/` when the dataset stage is enabled, reusing a matching local file;
-3. synchronizes S3 model objects into `<data_root>/models/`, reusing the persistent cache;
-4. restores any prior source experiment required by artifact-only work;
-5. derives the full local pipeline configuration and validates its paths;
-6. sends optional email and/or Telegram `job started` notifications after staging succeeds;
-7. starts the AWS-independent core pipeline;
-8. records stage-based progress in `<data_root>/jobs/<job_id>/status.json`;
-9. uploads the completed experiment to `s3://<bucket>/<runs_prefix>/<experiment_name>/` when `aws_worker.upload_results` is `true`;
-10. sends optional email and/or Telegram success or failure notifications;
-11. applies `aws_worker.shutdown_on` and optionally stops the SageMaker JupyterLab App.
+```bash
+fourda-aws-worker plan --config config/run.json
+```
+
+The AWS composition root builds synchronous passes for:
+
+1. running a fail-closed AWS health check before expensive GPU work;
+2. downloading the configured bucket video into `<data_root>/input/` when the dataset stage is enabled, reusing a matching local file;
+3. synchronizing S3 model objects into `<data_root>/models/`, reusing the persistent cache;
+4. restoring any prior source experiment required by artifact-only work;
+5. preparing the experiment workspace;
+6. running 4DAnyone inference when enabled;
+7. exporting enabled Nerfstudio and Rerun artifacts;
+8. writing the run manifest and optionally uploading results;
+9. applying the SageMaker shutdown policy in a guaranteed finalizer.
+
+Observers record pass progress in `<data_root>/jobs/<job_id>/status.json` and send
+optional email/Telegram messages when the preflight, each pass, or the pipeline
+completes or fails. Observers never schedule passes. The core Pipeline invokes the
+next pass directly and runs all finalizers after either success or failure.
 
 The startup health check validates the current STS identity, bucket access, the exact S3
 video object, model-prefix listing, result-prefix `PutObject`, optional notification channels,
@@ -261,6 +272,7 @@ Valid shutdown policies are:
 
 - `never` — never stop the App automatically;
 - `success` — stop only after a successful pipeline and upload;
+- `failure` — stop only after a failed pipeline;
 - `always` — stop after either success or failure.
 
 Shutdown uses SageMaker `DeleteApp`. It stops compute without deleting the Space or its persistent EBS volume.
@@ -288,15 +300,29 @@ Persist that export in the SageMaker Space's `~/.bashrc`, then configure:
   "telegram": {
     "enabled": true,
     "chat_id": "REPLACE_WITH_CHAT_ID",
-    "bot_token_env": "CP_4DA_TELEGRAM_BOT_TOKEN"
+    "bot_token_env": "CP_4DA_TELEGRAM_BOT_TOKEN",
+    "stream_logs": false,
+    "resource_status_interval_seconds": null,
+    "shutdown_command": true,
+    "allowed_user_id": null
   }
 }
 ```
 
 The worker validates the bot and chat with `getChat` during its health check and uses
-`sendMessage` for start, success, and failure messages. A literal `bot_token` is also
+`sendMessage` for every pass start and completion. A failed pass includes its duration,
+error, and a bounded tail of the subprocess's combined stdout/stderr. A literal `bot_token` is also
 accepted instead of `bot_token_env`, but it writes the secret into the run document and
 detached job request and is therefore not recommended.
+
+While the worker is running, send `/shutdown` to the bot to delete the configured
+SageMaker JupyterLab App. `/shutdown JOB_ID` is also accepted and refuses to stop an App
+when the argument differs from the current job. Both the message `chat_id` and sender ID
+must match the configuration. For a private bot chat, `allowed_user_id` can remain `null`
+because the chat ID is also the user ID. For a group chat, set `allowed_user_id` explicitly.
+Set `shutdown_command` to `false` to disable bot control. Telegram long polling requires
+that the bot is not simultaneously configured with a webhook, and one bot token should
+control only one active worker at a time.
 
 ### Amazon SNS email
 

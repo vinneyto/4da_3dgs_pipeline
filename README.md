@@ -140,7 +140,9 @@ recon-config \
   --fourdanyone-root "$RECON_FOURDANYONE_ROOT"
 ```
 
-Telegram notifications are event-driven: one startup plan, then pass start,\ncompletion, or failure messages with a compact CPU/RAM/disk/GPU snapshot. There\nis no periodic resource polling or live log streaming.
+Telegram notifications are event-driven: one startup plan, then pass start,
+completion, or failure messages with a compact CPU/RAM/disk/GPU snapshot. There
+is no periodic resource polling or live log streaming.
 
 ## Validate and inspect
 

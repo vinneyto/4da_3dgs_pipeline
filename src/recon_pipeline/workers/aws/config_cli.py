@@ -164,15 +164,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     notifications.add_argument("--telegram-chat-id")
     notifications.add_argument(
-        "--telegram-stream-logs",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-    )
-    notifications.add_argument(
-        "--telegram-resource-status-interval-seconds",
-        type=int,
-    )
-    notifications.add_argument(
         "--telegram-bot-token-env",
         default="CP_4DA_TELEGRAM_BOT_TOKEN",
         help=(
@@ -264,13 +255,6 @@ def build_document(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("--telegram requires --telegram-chat-id")
     if not telegram_enabled and args.telegram_chat_id:
         raise ValueError("--no-telegram cannot be combined with --telegram-chat-id")
-    if (
-        args.telegram_stream_logs
-        or args.telegram_resource_status_interval_seconds is not None
-    ) and not telegram_enabled:
-        raise ValueError(
-            "Telegram log/resource options require --telegram"
-        )
     bucket, video = _resolve_video(args)
     job_id = args.job_id or args.experiment_name
     document: dict[str, Any] = {
@@ -375,10 +359,6 @@ def build_document(args: argparse.Namespace) -> dict[str, Any]:
                         "enabled": True,
                         "chat_id": args.telegram_chat_id,
                         "bot_token_env": args.telegram_bot_token_env,
-                        "stream_logs": args.telegram_stream_logs,
-                        "resource_status_interval_seconds": (
-                            args.telegram_resource_status_interval_seconds
-                        ),
                         "shutdown_command": args.telegram_shutdown_command,
                         "allowed_user_id": args.telegram_allowed_user_id,
                     }

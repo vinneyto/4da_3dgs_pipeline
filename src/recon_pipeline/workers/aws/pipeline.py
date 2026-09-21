@@ -77,7 +77,7 @@ def build_aws_pipeline(
         ConsoleObserver(),
         JobStatusObserver(status, job_dir / "status.json"),
         AwsNotificationObserver(worker, config.experiment_name),
-        RuntimeMonitoringObserver(worker, job_dir),
+        RuntimeMonitoringObserver(worker),
     ]
     return Pipeline(
         passes,

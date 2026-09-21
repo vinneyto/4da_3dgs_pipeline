@@ -5,20 +5,73 @@ from recon_pipeline.workers.aws.observers import AwsNotificationObserver, JobSta
 from recon_pipeline.workers.aws.status import JobStatus
 from recon_pipeline.core import PipelineContext
 from recon_pipeline.core.command import CommandError
-from recon_pipeline.core.events import PassCompleted, PassFailed, PassProgress, PassStarted
+from recon_pipeline.core.events import (
+    FinalizerFailed,
+    PassCompleted,
+    PassFailed,
+    PassProgress,
+    PassStarted,
+    PipelineStarted,
+    PipelineSucceeded,
+)
 from test_aws_health import make_config
 
 
-def test_notification_observer_reports_pass_duration_and_next_pass(
-    monkeypatch, tmp_path: Path
-) -> None:
-    published = []
+def notification_observer(monkeypatch, tmp_path: Path):
+    published: list[tuple[str, str]] = []
     monkeypatch.setattr(
         observers,
         "publish_notification",
-        lambda config, subject, body: published.append((subject, body)) or {"telegram": "sent"},
+        lambda config, subject, body: (
+            published.append((subject, body)) or {"telegram": "sent"}
+        ),
     )
-    observer = AwsNotificationObserver(make_config(tmp_path), "leo")
+    monkeypatch.setattr(
+        observers,
+        "collect_machine_resource_status",
+        lambda _config: "CPU: test · RAM: test · Disk: test\nGPU: test",
+    )
+    return AwsNotificationObserver(make_config(tmp_path), "leo"), published
+
+
+def test_notification_observer_starts_with_experiment_and_pass_plan(
+    monkeypatch, tmp_path: Path
+) -> None:
+    observer, published = notification_observer(monkeypatch, tmp_path)
+
+    observer.process(
+        PipelineStarted(("AWS preflight", "4DAnyone inference")),
+        PipelineContext(),
+    )
+
+    assert published == [
+        (
+            "Pipeline started: leo",
+            "Experiment: leo\nPasses:\n1. AWS preflight\n2. 4DAnyone inference",
+        )
+    ]
+
+
+def test_notification_observer_reports_pass_start_with_resources(
+    monkeypatch, tmp_path: Path
+) -> None:
+    observer, published = notification_observer(monkeypatch, tmp_path)
+
+    observer.process(
+        PassStarted("fourdanyone-inference", "4DAnyone inference", 4, 7),
+        PipelineContext(),
+    )
+
+    assert published[0][0] == "Pass 4/7 started"
+    assert "4DAnyone inference" in published[0][1]
+    assert "CPU: test" in published[0][1]
+    assert "GPU: test" in published[0][1]
+
+
+def test_notification_observer_reports_pass_completion_duration_and_resources(
+    monkeypatch, tmp_path: Path
+) -> None:
+    observer, published = notification_observer(monkeypatch, tmp_path)
     event = PassCompleted(
         pass_id="fourdanyone-inference",
         pass_name="4DAnyone inference",
@@ -32,36 +85,14 @@ def test_notification_observer_reports_pass_duration_and_next_pass(
 
     assert published[0][0] == "Pass 4/7 completed"
     assert "Duration: 2m 5s" in published[0][1]
-    assert "Next: Nerfstudio dataset export" in published[0][1]
+    assert "CPU: test" in published[0][1]
+    assert "Next:" not in published[0][1]
 
 
-def test_notification_observer_reports_pass_start(monkeypatch, tmp_path: Path) -> None:
-    published = []
-    monkeypatch.setattr(
-        observers,
-        "publish_notification",
-        lambda config, subject, body: published.append((subject, body)) or {"telegram": "sent"},
-    )
-    observer = AwsNotificationObserver(make_config(tmp_path), "leo")
-
-    observer.process(
-        PassStarted("fourdanyone-inference", "4DAnyone inference", 4, 7),
-        PipelineContext(),
-    )
-
-    assert published == [("Pass 4/7 started", "4DAnyone inference")]
-
-
-def test_notification_observer_includes_failed_command_output(
+def test_notification_observer_includes_failed_command_output_and_resources(
     monkeypatch, tmp_path: Path
 ) -> None:
-    published = []
-    monkeypatch.setattr(
-        observers,
-        "publish_notification",
-        lambda config, subject, body: published.append((subject, body)) or {"telegram": "sent"},
-    )
-    observer = AwsNotificationObserver(make_config(tmp_path), "leo")
+    observer, published = notification_observer(monkeypatch, tmp_path)
     error = CommandError(["python", "inference.py"], 1, output_tail="model output\nCUDA OOM")
 
     observer.process(
@@ -71,8 +102,28 @@ def test_notification_observer_includes_failed_command_output(
 
     assert published[0][0] == "Pass 4/7 failed"
     assert "Duration: 2m 5s" in published[0][1]
+    assert "CPU: test" in published[0][1]
     assert "Output tail:\nmodel output\nCUDA OOM" in published[0][1]
 
+
+
+def test_notification_observer_ignores_progress_summary_and_finalizer_events(
+    monkeypatch, tmp_path: Path
+) -> None:
+    observer, published = notification_observer(monkeypatch, tmp_path)
+    context = PipelineContext()
+
+    observer.process(
+        PassProgress("inference", "Inference", 1, 1, 0.5, "Generating views"),
+        context,
+    )
+    observer.process(PipelineSucceeded(10.0), context)
+    observer.process(
+        FinalizerFailed("shutdown", "Shutdown", 1.0, RuntimeError("denied")),
+        context,
+    )
+
+    assert published == []
 
 def test_status_observer_maps_local_pass_progress_to_whole_plan(tmp_path: Path) -> None:
     path = tmp_path / "status.json"

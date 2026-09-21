@@ -37,8 +37,6 @@ class TelegramConfig:
     bot_token: str | None = None
     bot_token_env: str | None = None
     enabled: bool = True
-    stream_logs: bool = False
-    resource_status_interval_seconds: int | None = None
     shutdown_command: bool = True
     allowed_user_id: str | None = None
 
@@ -48,13 +46,6 @@ class TelegramConfig:
         if self.enabled and bool(self.bot_token) == bool(self.bot_token_env):
             raise ValueError(
                 "telegram must define exactly one of bot_token or bot_token_env"
-            )
-        if (
-            self.resource_status_interval_seconds is not None
-            and self.resource_status_interval_seconds < 60
-        ):
-            raise ValueError(
-                "telegram resource_status_interval_seconds must be at least 60"
             )
         if self.allowed_user_id is not None and not self.allowed_user_id.strip():
             raise ValueError("telegram allowed_user_id must not be empty")
@@ -217,6 +208,12 @@ class AwsWorkerConfig:
                 "email": payload["notification_email"],
             }
         telegram_payload = notifications.get("telegram", payload.get("telegram"))
+        if telegram_payload:
+            telegram_payload = dict(telegram_payload)
+            # Versions up to schema 6 exposed noisy runtime monitoring controls.
+            # Accept old run documents, but intentionally ignore those settings.
+            telegram_payload.pop("stream_logs", None)
+            telegram_payload.pop("resource_status_interval_seconds", None)
         sagemaker_payload = payload.get("sagemaker") or {
             "domain_id": payload["sagemaker_domain_id"],
             "space_name": payload["sagemaker_space_name"],

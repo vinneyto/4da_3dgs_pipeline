@@ -97,7 +97,7 @@ def test_generator_can_replace_a_document_with_force(tmp_path: Path) -> None:
     assert pipeline.num_views == 72
 
 
-def test_generator_writes_optional_telegram_monitoring(tmp_path: Path) -> None:
+def test_generator_writes_concise_telegram_configuration(tmp_path: Path) -> None:
     output = tmp_path / "run.json"
 
     main(
@@ -105,19 +105,33 @@ def test_generator_writes_optional_telegram_monitoring(tmp_path: Path) -> None:
             *arguments(output),
             "--telegram-chat-id",
             "123456",
-            "--telegram-stream-logs",
-            "--telegram-resource-status-interval-seconds",
-            "60",
         ]
     )
 
+    raw = json.loads(output.read_text())
     _, worker = load_aws_worker_config(output)
+    telegram = raw["aws_worker"]["notifications"]["telegram"]
     assert worker.telegram is not None
-    assert worker.telegram.stream_logs is True
-    assert worker.telegram.resource_status_interval_seconds == 60
     assert worker.telegram.shutdown_command is True
     assert worker.telegram.shutdown_user_id == "123456"
+    assert "stream_logs" not in telegram
+    assert "resource_status_interval_seconds" not in telegram
 
+
+def test_loader_ignores_legacy_noisy_telegram_options(tmp_path: Path) -> None:
+    output = tmp_path / "run.json"
+    main([*arguments(output), "--telegram-chat-id", "123456"])
+    raw = json.loads(output.read_text())
+    raw["aws_worker"]["notifications"]["telegram"]["stream_logs"] = True
+    raw["aws_worker"]["notifications"]["telegram"][
+        "resource_status_interval_seconds"
+    ] = 60
+    output.write_text(json.dumps(raw))
+
+    _, worker = load_aws_worker_config(output)
+
+    assert worker.telegram is not None
+    assert worker.telegram.chat_id == "123456"
 
 def test_generator_supports_explicit_notification_switches(tmp_path: Path) -> None:
     output = tmp_path / "run.json"

@@ -25,15 +25,13 @@ from recon_pipeline.core.events import (
 
 from .aws import (
     get_telegram_updates,
-    publish_completion,
     publish_notification,
-    publish_started,
     publish_telegram,
     stop_sagemaker_app,
 )
-from .artifacts import AWS_HEALTH, RUN_RESULT, S3_RESULT
+from .artifacts import RUN_RESULT
 from .config import AwsWorkerConfig
-from .monitoring import TelegramRuntimeMonitoring
+from .monitoring import TelegramRuntimeMonitoring, collect_machine_resource_status
 from .status import JobStatus, utc_now
 
 
@@ -187,7 +185,7 @@ class JobStatusObserver(PipelineObserver):
 
 
 class AwsNotificationObserver(QueuedPipelineObserver):
-    """Send structured lifecycle notifications; delivery remains non-critical."""
+    """Send concise pass lifecycle notifications; delivery remains non-critical."""
 
     def __init__(
         self, worker: AwsWorkerConfig, experiment_name: str
@@ -200,33 +198,32 @@ class AwsNotificationObserver(QueuedPipelineObserver):
         outcomes = publish_notification(self.worker, subject, body)
         print(f"Notifications: {outcomes or 'disabled'}", flush=True)
 
+    def _resources(self) -> str:
+        return collect_machine_resource_status(self.worker)
+
     def process(self, event: PipelineEvent, context: PipelineContext) -> None:
-        if isinstance(event, PassStarted):
+        if isinstance(event, PipelineStarted):
+            passes = "\n".join(
+                f"{index}. {name}"
+                for index, name in enumerate(event.pass_names, start=1)
+            )
+            self._publish(
+                f"Pipeline started: {self.experiment_name}",
+                f"Experiment: {self.experiment_name}\nPasses:\n{passes}",
+            )
+        elif isinstance(event, PassStarted):
             self._publish(
                 f"Pass {event.pass_index}/{event.pass_count} started",
-                event.pass_name,
+                f"{event.pass_name}\n{self._resources()}",
             )
         elif isinstance(event, PassCompleted):
-            if event.pass_id == "aws-preflight":
-                outcomes = publish_started(
-                    self.worker,
-                    context.require(AWS_HEALTH),
-                    self.experiment_name,
-                    event.duration_seconds,
-                )
-                print(f"Start notifications: {outcomes or 'disabled'}", flush=True)
-            next_line = (
-                f"Next: {event.next_pass_name}"
-                if event.next_pass_name
-                else "Next: pipeline finalization"
-            )
             self._publish(
                 f"Pass {event.pass_index}/{event.pass_count} completed",
                 "\n".join(
                     [
                         event.pass_name,
                         f"Duration: {_format_duration(event.duration_seconds)}",
-                        next_line,
+                        self._resources(),
                     ]
                 ),
             )
@@ -236,44 +233,20 @@ class AwsNotificationObserver(QueuedPipelineObserver):
                 event.pass_name,
                 f"Duration: {_format_duration(event.duration_seconds)}",
                 f"Error: {event.error}",
+                self._resources(),
             ]
             if output:
                 lines.extend(["", "Output tail:", output])
-            lines.append(f"Shutdown policy: {self.worker.shutdown_on}")
             self._publish(
                 f"Pass {event.pass_index}/{event.pass_count} failed",
                 "\n".join(lines),
             )
-        elif isinstance(event, PipelineSucceeded):
-            result = context.artifacts.get(RUN_RESULT, {})
-            s3_uri = context.artifacts.get(S3_RESULT, "upload disabled")
-            body = "\n".join(
-                [
-                    f"Experiment: {self.experiment_name}",
-                    f"Local result: {result.get('experiment_dir', 'unavailable')}",
-                    f"S3 result: {s3_uri}",
-                    f"Elapsed: {_format_duration(event.duration_seconds)}",
-                    f"Shutdown policy: {self.worker.shutdown_on}",
-                ]
-            )
-            outcomes = publish_completion(
-                self.worker,
-                f"Reconstruction AWS job succeeded: {self.worker.job_id}",
-                body,
-            )
-            print(f"Completion notifications: {outcomes or 'disabled'}", flush=True)
-        elif isinstance(event, FinalizerFailed):
-            self._publish(
-                f"AWS job finalizer failed: {self.worker.job_id}",
-                f"{event.finalizer_name}: {event.error}",
-            )
 
 
 class RuntimeMonitoringObserver(PipelineObserver):
-    def __init__(self, worker: AwsWorkerConfig, job_dir: Path) -> None:
+    def __init__(self, worker: AwsWorkerConfig) -> None:
         self.monitoring = TelegramRuntimeMonitoring(
             worker,
-            job_dir,
             lambda subject, message: publish_telegram(worker, subject, message),
             lambda offset, timeout: get_telegram_updates(worker, offset, timeout),
             lambda: stop_sagemaker_app(worker.region, worker.sagemaker),

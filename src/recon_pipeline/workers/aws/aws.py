@@ -299,39 +299,6 @@ def run_health_check(
     return result
 
 
-def publish_started(
-    config: AwsWorkerConfig,
-    result: AwsHealthCheckResult,
-    experiment_name: str,
-    preflight_duration_seconds: float | None = None,
-) -> dict[str, str]:
-    duration_line = (
-        f"AWS preflight duration: {preflight_duration_seconds:.1f}s"
-        if preflight_duration_seconds is not None
-        else "AWS preflight duration: unavailable"
-    )
-    return publish_notification(
-        config,
-        f"Reconstruction AWS job started: {config.job_id}",
-        "\n".join(
-            [
-                f"Reconstruction AWS worker health check passed for job {config.job_id}.",
-                f"Experiment: {experiment_name}",
-                f"Account: {result.account}",
-                f"Caller: {result.caller_arn}",
-                f"S3 input: {result.video_s3_uri}",
-                f"Local input: {config.local_video_path}",
-                f"Model objects visible in S3: {result.model_object_count}",
-                f"Email notifications: {result.email_status}",
-                f"Telegram notifications: {result.telegram_status}",
-                f"SageMaker App: {result.sagemaker_app_status or 'shutdown disabled'}",
-                duration_line,
-                "AWS preflight passed. The configured pipeline passes are starting now.",
-            ]
-        ),
-    )
-
-
 def download_input_video(config: AwsWorkerConfig) -> Path:
     client = _boto3().client("s3", region_name=config.region)
     bucket, key = config.video_s3_location

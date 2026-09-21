@@ -159,7 +159,7 @@ def make_config(
     )
 
 
-def test_health_check_validates_aws_and_sends_start_notification(monkeypatch, tmp_path) -> None:
+def test_health_check_validates_aws_without_sending_notifications(monkeypatch, tmp_path) -> None:
     fake = FakeBoto3()
     monkeypatch.setattr(aws, "_boto3", lambda: fake)
 
@@ -172,11 +172,6 @@ def test_health_check_validates_aws_and_sends_start_notification(monkeypatch, tm
     s3_calls = fake.clients["s3"].calls
     assert [name for name, _ in s3_calls].count("put_object") == 1
     assert [call for call in fake.clients["sns"].calls if call[0] == "publish"] == []
-
-    aws.publish_started(make_config(tmp_path), result, "leo-one-layer")
-    publish = [call for call in fake.clients["sns"].calls if call[0] == "publish"]
-    assert len(publish) == 1
-    assert publish[0][1]["Subject"] == "Reconstruction AWS job started: job-01"
 
 
 def test_health_check_reports_pending_email_without_blocking(monkeypatch, tmp_path) -> None:

@@ -64,7 +64,6 @@ export RECON_RUNS_PREFIX="runs"
 
 # Notifications and shutdown
 export RECON_TELEGRAM_BOT_TOKEN_ENV="CP_4DA_TELEGRAM_BOT_TOKEN"
-export RECON_TELEGRAM_RESOURCE_INTERVAL_SECONDS="60"
 export RECON_SHUTDOWN_ON="always"
 : "${CP_4DA_TELEGRAM_CHAT_ID:?CP_4DA_TELEGRAM_CHAT_ID is required}"
 export CP_4DA_TELEGRAM_ALLOWED_USER_ID="$CP_4DA_TELEGRAM_CHAT_ID"
@@ -132,8 +131,6 @@ recon-config \
   --telegram \
   --telegram-chat-id "$CP_4DA_TELEGRAM_CHAT_ID" \
   --telegram-bot-token-env "$RECON_TELEGRAM_BOT_TOKEN_ENV" \
-  --telegram-stream-logs \
-  --telegram-resource-status-interval-seconds "$RECON_TELEGRAM_RESOURCE_INTERVAL_SECONDS" \
   --telegram-shutdown-command \
   --telegram-allowed-user-id "$CP_4DA_TELEGRAM_ALLOWED_USER_ID" \
   --sagemaker-domain-id "$CP_SM_DOMAIN_ID" \
@@ -142,6 +139,10 @@ recon-config \
   --data-root "$RECON_DATA_ROOT" \
   --fourdanyone-root "$RECON_FOURDANYONE_ROOT"
 ```
+
+Telegram notifications are event-driven: one startup plan, then pass start,
+completion, or failure messages with a compact CPU/RAM/disk/GPU snapshot. There
+is no periodic resource polling or live log streaming.
 
 ## Validate and inspect
 

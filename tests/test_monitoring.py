@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from fourda_aws_worker.config import TelegramConfig
-from fourda_aws_worker.monitoring import (
+from recon_pipeline.workers.aws.config import TelegramConfig
+from recon_pipeline.workers.aws.monitoring import (
     TelegramLogTailer,
     TelegramCommandMonitor,
     TelegramRuntimeMonitoring,
@@ -45,7 +45,7 @@ def test_log_tailer_publishes_new_log_content(tmp_path: Path) -> None:
     tailer.stop()
 
     assert messages
-    assert messages[0][0] == "4DAnyone log: job-01"
+    assert messages[0][0] == "Reconstruction log: job-01"
     assert "first line\nsecond line" in "".join(body for _, body in messages)
 
 

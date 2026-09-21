@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 
-from fourda_aws_worker import aws
-from fourda_aws_worker.config import (
+from recon_pipeline.workers.aws import aws
+from recon_pipeline.workers.aws.config import (
     AwsWorkerConfig,
     BucketConfig,
     LocalWorkspaceConfig,
@@ -176,7 +176,7 @@ def test_health_check_validates_aws_and_sends_start_notification(monkeypatch, tm
     aws.publish_started(make_config(tmp_path), result, "leo-one-layer")
     publish = [call for call in fake.clients["sns"].calls if call[0] == "publish"]
     assert len(publish) == 1
-    assert publish[0][1]["Subject"] == "4DAnyone AWS job started: job-01"
+    assert publish[0][1]["Subject"] == "Reconstruction AWS job started: job-01"
 
 
 def test_health_check_reports_pending_email_without_blocking(monkeypatch, tmp_path) -> None:

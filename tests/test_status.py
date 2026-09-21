@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from fourda_aws_worker.status import JobStatus
+from recon_pipeline.workers.aws.status import JobStatus
 
 
 def test_status_round_trip_is_durable(tmp_path: Path) -> None:

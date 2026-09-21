@@ -4,13 +4,13 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from fourda_pipeline.core import (
+from recon_pipeline.core import (
     PassResult,
     Pipeline,
     PipelineContext,
     PipelineObserver,
 )
-from fourda_pipeline.events import (
+from recon_pipeline.core.events import (
     FinalizerCompleted,
     FinalizerFailed,
     PassCompleted,

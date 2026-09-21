@@ -3,8 +3,8 @@ from pathlib import Path
 
 import pytest
 
-from fourda_aws_worker.config import load_aws_worker_config
-from fourda_aws_worker.config_cli import main
+from recon_pipeline.workers.aws.config import load_aws_worker_config
+from recon_pipeline.workers.aws.config_cli import main
 
 
 def arguments(output: Path) -> list[str]:
@@ -117,6 +117,38 @@ def test_generator_writes_optional_telegram_monitoring(tmp_path: Path) -> None:
     assert worker.telegram.resource_status_interval_seconds == 60
     assert worker.telegram.shutdown_command is True
     assert worker.telegram.shutdown_user_id == "123456"
+
+
+def test_generator_supports_explicit_notification_switches(tmp_path: Path) -> None:
+    output = tmp_path / "run.json"
+
+    main(
+        [
+            "--output",
+            str(output),
+            "--experiment-name",
+            "leo",
+            "--bucket",
+            "cp-4da-test",
+            "--video",
+            "leo.MOV",
+            "--sagemaker-domain-id",
+            "d-test",
+            "--sagemaker-space-name",
+            "space-test",
+            "--no-email",
+            "--telegram",
+            "--telegram-chat-id",
+            "123456",
+        ]
+    )
+
+    raw = json.loads(output.read_text())
+    _, worker = load_aws_worker_config(output)
+    assert raw["aws_worker"]["notifications"]["email"] is None
+    assert worker.sns is None
+    assert worker.telegram is not None
+    assert worker.telegram.chat_id == "123456"
 
 
 def test_generator_writes_new_relative_bucket_shape_and_rerun(tmp_path: Path) -> None:

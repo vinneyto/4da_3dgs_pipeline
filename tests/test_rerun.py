@@ -1,6 +1,6 @@
 import pytest
 
-from fourda_rerun.exporter import select_camera_views
+from recon_pipeline.artifacts.rerun.exporter import select_camera_views
 
 
 def test_selects_evenly_spaced_views_from_first_layer() -> None:

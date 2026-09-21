@@ -97,6 +97,104 @@ def test_generator_can_replace_a_document_with_force(tmp_path: Path) -> None:
     assert pipeline.num_views == 72
 
 
+def test_generator_clones_template_with_new_identity_and_video(tmp_path: Path) -> None:
+    template = tmp_path / "leo.json"
+    output = tmp_path / "alex.json"
+    main(
+        [
+            *arguments(template),
+            "--layer-pitches",
+            "-15",
+            "0",
+            "15",
+            "--rerun",
+            "--telegram-chat-id",
+            "123456",
+            "--shutdown-on",
+            "always",
+        ]
+    )
+
+    main(
+        [
+            "--template",
+            str(template),
+            "--output",
+            str(output),
+            "--experiment-name",
+            "alex_three_layers_72views_01",
+            "--video",
+            "alex.MOV",
+        ]
+    )
+
+    source = json.loads(template.read_text())
+    cloned = json.loads(output.read_text())
+    pipeline, worker = load_aws_worker_config(output)
+    assert cloned["experiment_name"] == "alex_three_layers_72views_01"
+    assert cloned["aws_worker"]["job_id"] == "alex_three_layers_72views_01"
+    assert cloned["aws_worker"]["bucket"]["video"] == "alex.MOV"
+    assert cloned["aws_worker"]["bucket"]["name"] == "cp-4da-test"
+    assert cloned["pipeline"] == source["pipeline"]
+    assert cloned["environment"] == source["environment"]
+    assert cloned["aws_worker"]["notifications"] == source["aws_worker"]["notifications"]
+    assert cloned["aws_worker"]["shutdown_on"] == "always"
+    assert cloned["artifacts"]["dataset"]["nerfstudio"]["source_experiment_name"] == (
+        "alex_three_layers_72views_01"
+    )
+    assert cloned["artifacts"]["dataset"]["rerun"]["source_experiment_name"] == (
+        "alex_three_layers_72views_01"
+    )
+    assert pipeline.layer_pitches == (-15, 0, 15)
+    assert worker.video_s3_uri == "s3://cp-4da-test/input/alex.MOV"
+
+
+def test_template_clone_preserves_external_artifact_source(tmp_path: Path) -> None:
+    template = tmp_path / "artifact.json"
+    output = tmp_path / "clone.json"
+    main(arguments(template))
+    document = json.loads(template.read_text())
+    document["artifacts"]["dataset"]["rerun"]["source_experiment_name"] = "shared-run"
+    template.write_text(json.dumps(document))
+
+    main(
+        [
+            "--template",
+            str(template),
+            "--output",
+            str(output),
+            "--experiment-name",
+            "alex",
+            "--video",
+            "alex.MOV",
+        ]
+    )
+
+    cloned = json.loads(output.read_text())
+    assert cloned["artifacts"]["dataset"]["rerun"]["source_experiment_name"] == (
+        "shared-run"
+    )
+
+
+@pytest.mark.parametrize(
+    ("extra", "message"),
+    [
+        (["--video", "alex.MOV"], "--template requires --experiment-name"),
+        (["--experiment-name", "alex"], "--template requires --video"),
+    ],
+)
+def test_template_clone_requires_identity_and_video(
+    tmp_path: Path, extra: list[str], message: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    template = tmp_path / "template.json"
+    main(arguments(template))
+
+    with pytest.raises(SystemExit):
+        main(["--template", str(template), "--output", str(tmp_path / "out.json"), *extra])
+
+    assert message in capsys.readouterr().err
+
+
 def test_generator_writes_concise_telegram_configuration(tmp_path: Path) -> None:
     output = tmp_path / "run.json"
 

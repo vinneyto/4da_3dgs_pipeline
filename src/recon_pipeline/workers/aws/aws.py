@@ -91,21 +91,62 @@ def _check_telegram(config: AwsWorkerConfig) -> str:
     return str(chat.get("id", config.telegram.chat_id))
 
 
-def _publish_telegram(config: AwsWorkerConfig, subject: str, message: str) -> None:
+def _telegram_text(subject: str, message: str) -> str:
+    return f"{subject}\n\n{message}"[:4096]
+
+
+def _publish_telegram(config: AwsWorkerConfig, subject: str, message: str) -> int:
     assert config.telegram is not None
-    text = f"{subject}\n\n{message}"
-    _telegram_request(
+    result = _telegram_request(
         config,
         "sendMessage",
-        {"chat_id": config.telegram.chat_id, "text": text[:4096]},
+        {
+            "chat_id": config.telegram.chat_id,
+            "text": _telegram_text(subject, message),
+        },
+    )
+    return int(result["message_id"])
+
+
+def publish_telegram(config: AwsWorkerConfig, subject: str, message: str) -> int:
+    """Publish one Telegram message and return its message ID."""
+    if config.telegram is None or not config.telegram.enabled:
+        raise ValueError("Telegram notifications are not enabled")
+    return _publish_telegram(config, subject, message)
+
+
+def edit_telegram(
+    config: AwsWorkerConfig,
+    message_id: int,
+    subject: str,
+    message: str,
+) -> None:
+    """Replace an existing Telegram message with its terminal status."""
+    if config.telegram is None or not config.telegram.enabled:
+        raise ValueError("Telegram notifications are not enabled")
+    _telegram_request(
+        config,
+        "editMessageText",
+        {
+            "chat_id": config.telegram.chat_id,
+            "message_id": str(message_id),
+            "text": _telegram_text(subject, message),
+        },
     )
 
 
-def publish_telegram(config: AwsWorkerConfig, subject: str, message: str) -> None:
-    """Publish one Telegram message for runtime monitoring."""
-    if config.telegram is None or not config.telegram.enabled:
-        raise ValueError("Telegram notifications are not enabled")
-    _publish_telegram(config, subject, message)
+def publish_email(config: AwsWorkerConfig, subject: str, message: str) -> str:
+    """Publish one email notification and return its delivery status."""
+    if config.sns is None or not config.sns.enabled:
+        return "disabled"
+    try:
+        sns = _boto3().client("sns", region_name=config.region)
+        arn = topic_arn(config)
+        _confirmed_email_subscription(sns, arn, config.sns.email)
+        sns.publish(TopicArn=arn, Subject=subject[:100], Message=message)
+        return "sent"
+    except Exception as error:
+        return f"skipped: {error}"
 
 
 def get_telegram_updates(
@@ -133,14 +174,7 @@ def publish_notification(config: AwsWorkerConfig, subject: str, message: str) ->
     """Publish to every enabled channel without making notifications job-critical."""
     outcomes: dict[str, str] = {}
     if config.sns is not None and config.sns.enabled:
-        try:
-            sns = _boto3().client("sns", region_name=config.region)
-            arn = topic_arn(config)
-            _confirmed_email_subscription(sns, arn, config.sns.email)
-            sns.publish(TopicArn=arn, Subject=subject[:100], Message=message)
-            outcomes["email"] = "sent"
-        except Exception as error:
-            outcomes["email"] = f"skipped: {error}"
+        outcomes["email"] = publish_email(config, subject, message)
     if config.telegram is not None and config.telegram.enabled:
         try:
             _publish_telegram(config, subject, message)

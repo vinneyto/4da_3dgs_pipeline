@@ -1,10 +1,10 @@
 import json
 from pathlib import Path
 
-from fourda_4danyone.passes import FourDAnyoneInferencePass
-from fourda_nerfstudio.passes import NerfstudioExportPass
-from fourda_4danyone.config import FourDAnyoneConfig
-from fourda_pipeline.core import PipelineContext
+from recon_pipeline.datasets.fourdanyone.passes import FourDAnyoneInferencePass
+from recon_pipeline.reconstructions.nerfstudio.passes import NerfstudioExportPass
+from recon_pipeline.datasets.fourdanyone.config import FourDAnyoneConfig
+from recon_pipeline.core import PipelineContext
 
 
 def make_config(tmp_path: Path) -> FourDAnyoneConfig:

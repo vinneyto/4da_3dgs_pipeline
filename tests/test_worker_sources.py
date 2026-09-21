@@ -1,9 +1,9 @@
 from pathlib import Path
 
-from fourda_nerfstudio.config import NerfstudioArtifactConfig
-from fourda_4danyone.config import FourDAnyoneConfig
-from fourda_rerun.config import RerunConfig
-from fourda_aws_worker.worker import required_source_experiments
+from recon_pipeline.reconstructions.nerfstudio.config import NerfstudioArtifactConfig
+from recon_pipeline.datasets.fourdanyone.config import FourDAnyoneConfig
+from recon_pipeline.artifacts.rerun.config import RerunConfig
+from recon_pipeline.workers.aws.worker import required_source_experiments
 
 
 def make_config(tmp_path: Path, **changes) -> FourDAnyoneConfig:

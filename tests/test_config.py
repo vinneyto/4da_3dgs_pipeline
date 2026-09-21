@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from fourda_nerfstudio.config import NerfstudioArtifactConfig
-from fourda_4danyone.config import FourDAnyoneConfig, extract_4danyone_dataset_config
+from recon_pipeline.reconstructions.nerfstudio.config import NerfstudioArtifactConfig
+from recon_pipeline.datasets.fourdanyone.config import FourDAnyoneConfig, extract_4danyone_dataset_config
 
 
 def make_config(tmp_path: Path, **changes) -> FourDAnyoneConfig:

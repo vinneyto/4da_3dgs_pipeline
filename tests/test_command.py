@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from fourda_pipeline.command import CommandError, CommandRunner
+from recon_pipeline.core.command import CommandError, CommandRunner
 
 
 def test_command_error_retains_combined_output_tail(tmp_path: Path) -> None:

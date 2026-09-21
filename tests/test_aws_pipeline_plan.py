@@ -2,14 +2,14 @@ from pathlib import Path
 
 import pytest
 
-from fourda_aws_worker.finalizers import SageMakerShutdownFinalizer
-from fourda_aws_worker.finalizers import sagemaker_shutdown
-from fourda_aws_worker.pipeline import build_aws_pipeline
-from fourda_aws_worker.status import JobStatus
-from fourda_nerfstudio.config import NerfstudioArtifactConfig
-from fourda_4danyone.config import FourDAnyoneConfig
-from fourda_pipeline.core import PipelineContext, PipelineOutcome
-from fourda_rerun.config import RerunConfig
+from recon_pipeline.workers.aws.finalizers import SageMakerShutdownFinalizer
+from recon_pipeline.workers.aws.finalizers import sagemaker_shutdown
+from recon_pipeline.workers.aws.pipeline import build_aws_pipeline
+from recon_pipeline.workers.aws.status import JobStatus
+from recon_pipeline.reconstructions.nerfstudio.config import NerfstudioArtifactConfig
+from recon_pipeline.datasets.fourdanyone.config import FourDAnyoneConfig
+from recon_pipeline.core import PipelineContext, PipelineOutcome
+from recon_pipeline.artifacts.rerun.config import RerunConfig
 from test_aws_health import make_config as make_worker_config
 
 
@@ -43,7 +43,7 @@ def test_aws_builder_creates_explicit_full_execution_plan(tmp_path: Path) -> Non
         "s3-download-input",
         "s3-sync-models",
         "prepare-experiment",
-        "fourda-inference",
+        "fourdanyone-inference",
         "nerfstudio-export",
         "rerun-export",
         "write-run-manifest",
@@ -70,7 +70,7 @@ def test_artifact_only_plan_restores_shared_source_once(tmp_path: Path) -> None:
 
     assert ids.count("s3-restore-experiment:leo-original") == 1
     assert "s3-download-input" not in ids
-    assert "fourda-inference" not in ids
+    assert "fourdanyone-inference" not in ids
     assert "nerfstudio-export" in ids
     assert "rerun-export" in ids
 

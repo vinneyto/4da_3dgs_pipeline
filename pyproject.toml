@@ -3,9 +3,9 @@ requires = ["setuptools>=75", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "fourda-3dgs-pipeline"
+name = "recon-pipeline"
 version = "0.1.0"
-description = "4DAnyone to Nerfstudio/3DGS pipeline for AWS SageMaker"
+description = "Composable dataset and 3D reconstruction pipeline"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []
@@ -15,16 +15,18 @@ aws = [
   "boto3>=1.35,<2",
 ]
 rerun = [
+  "numpy>=1.26,<3",
   "rerun-sdk>=0.23,<1",
 ]
 dev = [
+  "numpy>=1.26,<3",
   "pytest>=8,<9",
 ]
 
 [project.scripts]
-fourda-aws-worker = "fourda_aws_worker.cli:main"
-fourda-worker-config = "fourda_aws_worker.config_cli:main"
-fourda-rerun = "fourda_rerun.cli:main"
+recon-aws-worker = "recon_pipeline.workers.aws.cli:main"
+recon-config = "recon_pipeline.workers.aws.config_cli:main"
+recon-rerun = "recon_pipeline.artifacts.rerun.cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

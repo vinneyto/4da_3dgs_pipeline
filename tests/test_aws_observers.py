@@ -176,7 +176,57 @@ def test_notification_observer_falls_back_to_new_message_when_edit_fails(
     ]
 
 
-def test_notification_observer_ignores_progress_summary_and_finalizer_events(
+def test_notification_observer_updates_running_pass_with_coarse_progress(
+    monkeypatch, tmp_path: Path
+) -> None:
+    observer, _, telegram_sent, telegram_edits = notification_observer(
+        monkeypatch, tmp_path
+    )
+    context = PipelineContext()
+    observer.process(PassStarted("inference", "4DAnyone inference", 5, 9), context)
+    observer._telegram_progress_edited_at["inference"] -= 6
+    observer._telegram_pass_started_at["inference"] -= 125
+
+    observer.process(
+        PassProgress(
+            "inference",
+            "4DAnyone inference",
+            5,
+            9,
+            0.45,
+            "Generating target-view videos",
+        ),
+        context,
+    )
+
+    assert len(telegram_sent) == 1
+    assert telegram_edits[0][0] == 101
+    assert telegram_edits[0][1] == "🔵 Pass 5/9 running · 45%"
+    assert "Stage: Generating target-view videos" in telegram_edits[0][2]
+    assert "Elapsed: 2m 5s" in telegram_edits[0][2]
+    assert "CPU: test" in telegram_edits[0][2]
+
+
+def test_notification_observer_throttles_duplicate_or_fast_progress_updates(
+    monkeypatch, tmp_path: Path
+) -> None:
+    observer, _, _, telegram_edits = notification_observer(monkeypatch, tmp_path)
+    context = PipelineContext()
+    observer.process(PassStarted("inference", "Inference", 1, 1), context)
+
+    event = PassProgress("inference", "Inference", 1, 1, 0.1, "Preparing")
+    observer.process(event, context)
+    assert telegram_edits == []
+
+    observer._telegram_progress_edited_at["inference"] -= 6
+    observer.process(event, context)
+    observer._telegram_progress_edited_at["inference"] -= 6
+    observer.process(event, context)
+
+    assert len(telegram_edits) == 1
+
+
+def test_notification_observer_ignores_summary_and_finalizer_events(
     monkeypatch, tmp_path: Path
 ) -> None:
     observer, published, telegram_sent, telegram_edits = notification_observer(
@@ -184,10 +234,6 @@ def test_notification_observer_ignores_progress_summary_and_finalizer_events(
     )
     context = PipelineContext()
 
-    observer.process(
-        PassProgress("inference", "Inference", 1, 1, 0.5, "Generating views"),
-        context,
-    )
     observer.process(PipelineSucceeded(10.0), context)
     observer.process(
         FinalizerFailed("shutdown", "Shutdown", 1.0, RuntimeError("denied")),

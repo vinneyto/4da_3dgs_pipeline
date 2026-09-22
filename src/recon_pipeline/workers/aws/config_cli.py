@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 from pathlib import Path
 from typing import Any, Sequence
 from urllib.parse import urlparse
 
-from .config import AwsWorkerConfig, materialize_pipeline_config
+from .config import AwsWorkerConfig, load_document, materialize_pipeline_config
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -18,6 +19,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--force", action="store_true", help="Replace an existing output file")
+    parser.add_argument(
+        "--template",
+        type=Path,
+        help=(
+            "Copy an existing run document and override its run identity and input. "
+            "Use with --experiment-name and --video"
+        ),
+    )
 
     environment = parser.add_argument_group("persistent execution environment")
     environment.add_argument(
@@ -60,7 +69,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     pipeline = parser.add_argument_group("pipeline")
-    pipeline.add_argument("--experiment-name", required=True)
+    pipeline.add_argument("--experiment-name")
     pipeline.add_argument("--job-id", help="Defaults to --experiment-name")
     pipeline.add_argument(
         "--dataset",
@@ -128,7 +137,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     aws = parser.add_argument_group("AWS worker")
-    video = aws.add_mutually_exclusive_group(required=True)
+    video = aws.add_mutually_exclusive_group()
     video.add_argument("--video", help="Path relative to the bucket input prefix")
     video.add_argument(
         "--s3-video-path",
@@ -183,8 +192,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     sagemaker = parser.add_argument_group("SageMaker")
-    sagemaker.add_argument("--sagemaker-domain-id", required=True)
-    sagemaker.add_argument("--sagemaker-space-name", required=True)
+    sagemaker.add_argument("--sagemaker-domain-id")
+    sagemaker.add_argument("--sagemaker-space-name")
     sagemaker.add_argument("--sagemaker-app-name", default="default")
 
     local = parser.add_argument_group("persistent local workspace")
@@ -228,7 +237,78 @@ def _resolve_video(args: argparse.Namespace) -> tuple[str, str]:
     return bucket, key
 
 
+def _replace_artifact_source_experiment(
+    value: Any,
+    *,
+    previous_experiment_name: str,
+    experiment_name: str,
+) -> None:
+    """Update artifact references that followed the template's run identity."""
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if key == "source_experiment_name" and child == previous_experiment_name:
+                value[key] = experiment_name
+            else:
+                _replace_artifact_source_experiment(
+                    child,
+                    previous_experiment_name=previous_experiment_name,
+                    experiment_name=experiment_name,
+                )
+    elif isinstance(value, list):
+        for child in value:
+            _replace_artifact_source_experiment(
+                child,
+                previous_experiment_name=previous_experiment_name,
+                experiment_name=experiment_name,
+            )
+
+
+def build_document_from_template(args: argparse.Namespace) -> dict[str, Any]:
+    if not args.experiment_name:
+        raise ValueError("--template requires --experiment-name")
+    if not args.video:
+        raise ValueError("--template requires --video")
+
+    document = load_document(args.template)
+    previous_experiment_name = document.get("experiment_name")
+    if not isinstance(previous_experiment_name, str) or not previous_experiment_name:
+        raise ValueError("template must contain a non-empty experiment_name")
+
+    document = copy.deepcopy(document)
+    document["experiment_name"] = args.experiment_name
+    worker_payload = document.get("aws_worker")
+    if not isinstance(worker_payload, dict):
+        raise ValueError("template must contain an aws_worker object")
+    bucket_payload = worker_payload.get("bucket")
+    if not isinstance(bucket_payload, dict):
+        raise ValueError("template must use the schema-v6 aws_worker.bucket object")
+
+    worker_payload["job_id"] = args.job_id or args.experiment_name
+    bucket_payload["video"] = args.video
+    if args.bucket:
+        bucket_payload["name"] = args.bucket
+    _replace_artifact_source_experiment(
+        document.get("artifacts"),
+        previous_experiment_name=previous_experiment_name,
+        experiment_name=args.experiment_name,
+    )
+
+    worker = AwsWorkerConfig.from_document(document)
+    materialize_pipeline_config(document, worker)
+    return document
+
+
 def build_document(args: argparse.Namespace) -> dict[str, Any]:
+    if args.template:
+        return build_document_from_template(args)
+    if not args.experiment_name:
+        raise ValueError("--experiment-name is required")
+    if not args.video and not args.s3_video_path:
+        raise ValueError("one of --video or --s3-video-path is required")
+    if not args.sagemaker_domain_id:
+        raise ValueError("--sagemaker-domain-id is required")
+    if not args.sagemaker_space_name:
+        raise ValueError("--sagemaker-space-name is required")
     email_enabled = (
         args.email
         if args.email is not None
@@ -397,9 +477,12 @@ def main(argv: Sequence[str] | None = None) -> None:
     try:
         document = build_document(args)
         write_document(document, args.output, args.force)
-    except (FileExistsError, KeyError, TypeError, ValueError) as error:
+    except (FileExistsError, KeyError, OSError, TypeError, ValueError) as error:
         parser.error(str(error))
-    total_views = args.views_per_layer * len(args.layer_pitches)
+    dataset_config = document["pipeline"]["dataset"]["config"]
+    total_views = dataset_config["views_per_layer"] * len(
+        dataset_config["layer_pitches"]
+    )
     bucket_config = document["aws_worker"]["bucket"]
     video_key = "/".join(
         part
@@ -407,12 +490,21 @@ def main(argv: Sequence[str] | None = None) -> None:
         if part
     )
     print(f"Wrote AWS worker config: {args.output}")
-    print(f"Job: {args.job_id or args.experiment_name}")
+    print(f"Job: {document['aws_worker']['job_id']}")
     print(f"Input: s3://{bucket_config['name']}/{video_key}")
     print(f"Target views: {total_views}")
-    print(f"Dataset stage: {'enabled' if args.dataset else 'disabled'}")
-    print(f"Nerfstudio artifact: {'enabled' if args.nerfstudio else 'disabled'}")
-    print(f"Dataset Rerun artifact: {'enabled' if args.rerun else 'disabled'}")
+    print(
+        "Dataset stage: "
+        f"{'enabled' if document['pipeline']['dataset']['enabled'] else 'disabled'}"
+    )
+    print(
+        "Nerfstudio artifact: "
+        f"{'enabled' if document['artifacts']['dataset']['nerfstudio']['enabled'] else 'disabled'}"
+    )
+    print(
+        "Dataset Rerun artifact: "
+        f"{'enabled' if document['artifacts']['dataset']['rerun']['enabled'] else 'disabled'}"
+    )
 
 
 if __name__ == "__main__":

@@ -14,6 +14,30 @@ recon-config --help
 recon-aws-worker --help
 ```
 
+## Clone an existing run configuration
+
+Use a validated JSON document as a template when only the input and run identity
+change. All pipeline, artifact, environment, AWS, notification, and shutdown
+settings are preserved. Artifact source references that pointed at the template
+experiment are updated to the new experiment automatically.
+
+```bash
+export RECON_TEMPLATE_CONFIG="$RECON_PIPELINE_ROOT/config/leo-three-layers-rerun.json"
+export RECON_RUN_CONFIG="$RECON_PIPELINE_ROOT/config/alex-three-layers-rerun.json"
+export RECON_EXPERIMENT_NAME="alex_three_layers_72views_01"
+export RECON_VIDEO="alex.MOV"
+
+recon-config \
+  --template "$RECON_TEMPLATE_CONFIG" \
+  --output "$RECON_RUN_CONFIG" \
+  --experiment-name "$RECON_EXPERIMENT_NAME" \
+  --video "$RECON_VIDEO"
+```
+
+Pass `--force` only when the output file may be replaced deliberately. Use
+`--job-id` to override the default new job ID or `--bucket` to move the cloned
+run to another bucket.
+
 ## Configure a three-layer AWS run
 
 Define every value used to generate the run document:

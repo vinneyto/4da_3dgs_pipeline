@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -31,6 +33,7 @@ from .aws import (
     publish_email,
     publish_notification,
     publish_telegram,
+    publish_telegram_photos,
     stop_sagemaker_app,
 )
 from .artifacts import RUN_RESULT
@@ -205,6 +208,7 @@ class AwsNotificationObserver(QueuedPipelineObserver):
     """Send concise pass lifecycle notifications; delivery remains non-critical."""
 
     _PROGRESS_EDIT_INTERVAL_SECONDS = 5.0
+    _HEARTBEAT_INTERVAL_SECONDS = 60.0
 
     def __init__(
         self, worker: AwsWorkerConfig, experiment_name: str
@@ -214,8 +218,29 @@ class AwsNotificationObserver(QueuedPipelineObserver):
         self.experiment_name = experiment_name
         self._telegram_pass_messages: dict[str, int] = {}
         self._telegram_pass_started_at: dict[str, float] = {}
+        self._telegram_pass_events: dict[str, PassStarted] = {}
+        self._telegram_latest_progress: dict[str, tuple[float, str]] = {}
         self._telegram_progress_updates: dict[str, tuple[float, str]] = {}
         self._telegram_progress_edited_at: dict[str, float] = {}
+        self._telegram_state_lock = threading.RLock()
+        self._telegram_edit_lock = threading.Lock()
+        self._heartbeat_stop = threading.Event()
+        self._heartbeat_thread = threading.Thread(
+            target=self._heartbeat_loop,
+            name=f"telegram-heartbeat-{worker.job_id}",
+            daemon=True,
+        )
+
+    def start(self, context: PipelineContext) -> None:
+        super().start(context)
+        if self.worker.telegram is not None and self.worker.telegram.enabled:
+            self._heartbeat_thread.start()
+
+    def close(self) -> None:
+        self._heartbeat_stop.set()
+        if self._heartbeat_thread.is_alive():
+            self._heartbeat_thread.join(timeout=5)
+        super().close()
 
     def _publish(self, subject: str, body: str) -> None:
         outcomes = publish_notification(self.worker, subject, body)
@@ -232,49 +257,91 @@ class AwsNotificationObserver(QueuedPipelineObserver):
         if self.worker.telegram is not None and self.worker.telegram.enabled:
             try:
                 message_id = publish_telegram(self.worker, subject, body)
-                self._telegram_pass_messages[event.pass_id] = message_id
                 started_at = time.monotonic()
-                self._telegram_pass_started_at[event.pass_id] = started_at
-                self._telegram_progress_edited_at[event.pass_id] = started_at
+                with self._telegram_state_lock:
+                    self._telegram_pass_messages[event.pass_id] = message_id
+                    self._telegram_pass_started_at[event.pass_id] = started_at
+                    self._telegram_pass_events[event.pass_id] = event
+                    self._telegram_progress_edited_at[event.pass_id] = started_at
                 outcomes["telegram"] = f"sent (message {message_id})"
             except Exception as error:
                 outcomes["telegram"] = f"skipped: {error}"
         print(f"Notifications: {outcomes or 'disabled'}", flush=True)
 
     def _update_pass_progress(self, event: PassProgress) -> None:
-        message_id = self._telegram_pass_messages.get(event.pass_id)
-        started_at = self._telegram_pass_started_at.get(event.pass_id)
-        if message_id is None or started_at is None:
-            return
         progress = (event.fraction, event.message)
-        if self._telegram_progress_updates.get(event.pass_id) == progress:
-            return
         now = time.monotonic()
-        last_edit = self._telegram_progress_edited_at.get(event.pass_id, started_at)
-        if now - last_edit < self._PROGRESS_EDIT_INTERVAL_SECONDS:
-            return
-        self._telegram_progress_updates[event.pass_id] = progress
-        self._telegram_progress_edited_at[event.pass_id] = now
-        subject = (
-            f"🔵 Pass {event.pass_index}/{event.pass_count} running · "
-            f"{event.fraction:.0%}"
-        )
-        body = "\n".join(
-            [
-                event.pass_name,
-                f"Stage: {event.message}",
-                f"Elapsed: {_format_duration(now - started_at)}",
-                self._resources(),
-            ]
-        )
-        try:
-            edit_telegram(self.worker, message_id, subject, body)
-            outcome = f"edited (message {message_id})"
-        except Exception as error:
-            # Progress is advisory. Keep the original message available for the
-            # terminal edit instead of creating duplicate progress messages.
-            outcome = f"edit skipped: {error}"
+        with self._telegram_state_lock:
+            started_at = self._telegram_pass_started_at.get(event.pass_id)
+            if started_at is None:
+                return
+            self._telegram_latest_progress[event.pass_id] = progress
+            if self._telegram_progress_updates.get(event.pass_id) == progress:
+                return
+            last_edit = self._telegram_progress_edited_at.get(
+                event.pass_id, started_at
+            )
+            if now - last_edit < self._PROGRESS_EDIT_INTERVAL_SECONDS:
+                return
+        self._edit_running_pass(event.pass_id, now)
+
+    def _edit_running_pass(self, pass_id: str, now: float) -> None:
+        with self._telegram_edit_lock:
+            with self._telegram_state_lock:
+                message_id = self._telegram_pass_messages.get(pass_id)
+                started_at = self._telegram_pass_started_at.get(pass_id)
+                event = self._telegram_pass_events.get(pass_id)
+                progress = self._telegram_latest_progress.get(pass_id)
+                if message_id is None or started_at is None or event is None:
+                    return
+            if progress is None:
+                subject = f"🔵 Pass {event.pass_index}/{event.pass_count} running"
+                lines = [
+                    event.pass_name,
+                    f"Elapsed: {_format_duration(now - started_at)}",
+                    self._resources(),
+                ]
+            else:
+                fraction, message = progress
+                subject = (
+                    f"🔵 Pass {event.pass_index}/{event.pass_count} running · "
+                    f"{fraction:.0%}"
+                )
+                lines = [
+                    event.pass_name,
+                    f"Stage: {message}",
+                    f"Elapsed: {_format_duration(now - started_at)}",
+                    self._resources(),
+                ]
+            try:
+                edit_telegram(self.worker, message_id, subject, "\n".join(lines))
+                outcome = f"edited (message {message_id})"
+            except Exception as error:
+                # Progress is advisory. Keep the original message available for the
+                # terminal edit instead of creating duplicate progress messages.
+                outcome = f"edit skipped: {error}"
+            finally:
+                with self._telegram_state_lock:
+                    if self._telegram_pass_messages.get(pass_id) == message_id:
+                        self._telegram_progress_edited_at[pass_id] = now
+                        if progress is not None:
+                            self._telegram_progress_updates[pass_id] = progress
         print(f"Notifications: {{'telegram': {outcome!r}}}", flush=True)
+
+    def _refresh_active_passes(self, now: float | None = None) -> None:
+        now = time.monotonic() if now is None else now
+        with self._telegram_state_lock:
+            due = [
+                pass_id
+                for pass_id, edited_at in self._telegram_progress_edited_at.items()
+                if now - edited_at >= self._HEARTBEAT_INTERVAL_SECONDS
+            ]
+        for pass_id in due:
+            self._edit_running_pass(pass_id, now)
+
+    def _heartbeat_loop(self) -> None:
+        while not self._heartbeat_stop.wait(self._HEARTBEAT_INTERVAL_SECONDS):
+            self._refresh_active_passes()
 
     def _publish_pass_finished(
         self,
@@ -286,13 +353,17 @@ class AwsNotificationObserver(QueuedPipelineObserver):
         if self.worker.sns is not None and self.worker.sns.enabled:
             outcomes["email"] = publish_email(self.worker, subject, body)
         if self.worker.telegram is not None and self.worker.telegram.enabled:
-            message_id = self._telegram_pass_messages.pop(event.pass_id, None)
-            self._telegram_pass_started_at.pop(event.pass_id, None)
-            self._telegram_progress_updates.pop(event.pass_id, None)
-            self._telegram_progress_edited_at.pop(event.pass_id, None)
+            with self._telegram_state_lock:
+                message_id = self._telegram_pass_messages.pop(event.pass_id, None)
+                self._telegram_pass_started_at.pop(event.pass_id, None)
+                self._telegram_pass_events.pop(event.pass_id, None)
+                self._telegram_latest_progress.pop(event.pass_id, None)
+                self._telegram_progress_updates.pop(event.pass_id, None)
+                self._telegram_progress_edited_at.pop(event.pass_id, None)
             if message_id is not None:
                 try:
-                    edit_telegram(self.worker, message_id, subject, body)
+                    with self._telegram_edit_lock:
+                        edit_telegram(self.worker, message_id, subject, body)
                     outcomes["telegram"] = f"edited (message {message_id})"
                 except Exception as error:
                     outcomes["telegram"] = f"edit skipped: {error}"
@@ -303,6 +374,39 @@ class AwsNotificationObserver(QueuedPipelineObserver):
                 except Exception as error:
                     outcomes["telegram"] = f"skipped: {error}"
         print(f"Notifications: {outcomes or 'disabled'}", flush=True)
+
+    def _publish_fourdanyone_previews(self, event: PassCompleted) -> None:
+        if event.pass_id != "fourdanyone-inference":
+            return
+        if self.worker.telegram is None or not self.worker.telegram.enabled:
+            return
+        try:
+            from recon_pipeline.datasets.fourdanyone.previews import (
+                create_cardinal_previews,
+            )
+
+            result_dir = Path(str(event.details["path"]))
+            views_per_layer = int(event.details["views_per_layer"])
+            layer_pitches = tuple(
+                int(value) for value in event.details["layer_pitches"]
+            )
+            with tempfile.TemporaryDirectory(prefix="recon-telegram-previews-") as temp:
+                previews = create_cardinal_previews(
+                    result_dir,
+                    Path(temp),
+                    views_per_layer,
+                    layer_pitches,
+                )
+                message_ids = publish_telegram_photos(
+                    self.worker,
+                    previews,
+                    f"4DAnyone previews · {self.experiment_name}",
+                )
+            outcome = f"sent ({len(message_ids)} photos)"
+        except Exception as error:
+            # Preview delivery is advisory and must never fail the pipeline.
+            outcome = f"skipped: {error}"
+        print(f"Notifications: {{'telegram_previews': {outcome!r}}}", flush=True)
 
     def process(self, event: PipelineEvent, context: PipelineContext) -> None:
         if isinstance(event, PipelineStarted):
@@ -333,6 +437,7 @@ class AwsNotificationObserver(QueuedPipelineObserver):
                     ]
                 ),
             )
+            self._publish_fourdanyone_previews(event)
         elif isinstance(event, PassFailed):
             output = _failure_output(event.error)
             lines = [

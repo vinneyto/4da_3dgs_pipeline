@@ -123,6 +123,8 @@ class FourDAnyoneInferencePass:
             details={
                 "experiment": self.config.experiment_name,
                 "views": self.config.num_views,
+                "views_per_layer": self.config.views_per_layer,
+                "layer_pitches": list(self.config.layer_pitches),
                 "path": str(self.config.inference_dir),
             },
         )

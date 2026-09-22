@@ -226,6 +226,87 @@ def test_notification_observer_throttles_duplicate_or_fast_progress_updates(
     assert len(telegram_edits) == 1
 
 
+def test_notification_observer_refreshes_elapsed_time_once_per_minute(
+    monkeypatch, tmp_path: Path
+) -> None:
+    observer, _, telegram_sent, telegram_edits = notification_observer(
+        monkeypatch, tmp_path
+    )
+    context = PipelineContext()
+    observer.process(PassStarted("inference", "Inference", 1, 1), context)
+    observer.process(
+        PassProgress("inference", "Inference", 1, 1, 0.1, "Generating views"),
+        context,
+    )
+    observer._telegram_pass_started_at["inference"] -= 125
+    observer._telegram_progress_edited_at["inference"] -= 60
+
+    observer._refresh_active_passes()
+    observer._refresh_active_passes()
+
+    assert len(telegram_sent) == 1
+    assert len(telegram_edits) == 1
+    assert telegram_edits[0][1] == "🔵 Pass 1/1 running · 10%"
+    assert "Stage: Generating views" in telegram_edits[0][2]
+    assert "Elapsed: 2m 5s" in telegram_edits[0][2]
+    assert "CPU: test" in telegram_edits[0][2]
+
+
+def test_notification_observer_sends_four_previews_after_fourdanyone(
+    monkeypatch, tmp_path: Path
+) -> None:
+    observer, _, _, _ = notification_observer(monkeypatch, tmp_path)
+    preview_calls: list[tuple[Path, Path, int, tuple[int, ...]]] = []
+    albums: list[tuple[tuple[Path, ...], str]] = []
+
+    def create_previews(result_dir, output_dir, views_per_layer, layer_pitches):
+        preview_calls.append(
+            (result_dir, output_dir, views_per_layer, tuple(layer_pitches))
+        )
+        paths = tuple(output_dir / f"camera-{index}.jpg" for index in range(4))
+        for path in paths:
+            path.write_bytes(b"jpeg")
+        return paths
+
+    monkeypatch.setattr(
+        "recon_pipeline.datasets.fourdanyone.previews.create_cardinal_previews",
+        create_previews,
+    )
+    monkeypatch.setattr(
+        observers,
+        "publish_telegram_photos",
+        lambda _config, paths, caption: (
+            albums.append((tuple(paths), caption)) or (201, 202, 203, 204)
+        ),
+    )
+    context = PipelineContext()
+    observer.process(
+        PassStarted("fourdanyone-inference", "4DAnyone inference", 5, 9),
+        context,
+    )
+    observer.process(
+        PassCompleted(
+            "fourdanyone-inference",
+            "4DAnyone inference",
+            5,
+            9,
+            100.0,
+            "Nerfstudio dataset export",
+            {
+                "path": str(tmp_path / "result"),
+                "views_per_layer": 24,
+                "layer_pitches": [-15, 0, 15],
+            },
+        ),
+        context,
+    )
+
+    assert preview_calls[0][0] == tmp_path / "result"
+    assert preview_calls[0][2:] == (24, (-15, 0, 15))
+    assert len(albums[0][0]) == 4
+    assert albums[0][1] == "4DAnyone previews · leo"
+
+
 def test_notification_observer_ignores_summary_and_finalizer_events(
     monkeypatch, tmp_path: Path
 ) -> None:

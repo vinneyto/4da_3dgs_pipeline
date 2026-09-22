@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import mimetypes
+import uuid
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Sequence
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -85,6 +87,69 @@ def _telegram_request(
     return result.get("result")
 
 
+def _telegram_multipart_request(
+    config: AwsWorkerConfig,
+    method: str,
+    fields: dict[str, str],
+    files: dict[str, Path],
+    *,
+    request_timeout: float = 30,
+) -> Any:
+    if config.telegram is None:
+        raise ValueError("Telegram notifications are not configured")
+    token = config.telegram.resolve_bot_token()
+    boundary = f"recon-pipeline-{uuid.uuid4().hex}"
+    body = bytearray()
+
+    def append(value: bytes) -> None:
+        body.extend(value)
+        body.extend(b"\r\n")
+
+    for name, value in fields.items():
+        append(f"--{boundary}".encode())
+        append(f'Content-Disposition: form-data; name="{name}"'.encode())
+        append(b"")
+        append(value.encode("utf-8"))
+    for name, path in files.items():
+        append(f"--{boundary}".encode())
+        append(
+            (
+                f'Content-Disposition: form-data; name="{name}"; '
+                f'filename="{path.name}"'
+            ).encode()
+        )
+        append(
+            (
+                "Content-Type: "
+                f"{mimetypes.guess_type(path.name)[0] or 'application/octet-stream'}"
+            ).encode()
+        )
+        append(b"")
+        append(path.read_bytes())
+    body.extend(f"--{boundary}--\r\n".encode())
+
+    request = Request(
+        f"https://api.telegram.org/bot{token}/{method}",
+        data=bytes(body),
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=request_timeout) as response:
+            result = json.loads(response.read())
+    except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, OSError) as error:
+        # Do not chain urllib exceptions: their URL contains the secret bot token.
+        raise RuntimeError(
+            f"Telegram API {method} request failed: {type(error).__name__}"
+        ) from None
+    if not result.get("ok"):
+        raise RuntimeError(
+            f"Telegram API {method} rejected the request: "
+            f"{result.get('description', 'unknown error')}"
+        )
+    return result.get("result")
+
+
 def _check_telegram(config: AwsWorkerConfig) -> str:
     assert config.telegram is not None
     chat = _telegram_request(config, "getChat", {"chat_id": config.telegram.chat_id})
@@ -133,6 +198,44 @@ def edit_telegram(
             "text": _telegram_text(subject, message),
         },
     )
+
+
+def publish_telegram_photos(
+    config: AwsWorkerConfig,
+    paths: Sequence[Path],
+    caption: str,
+) -> tuple[int, ...]:
+    """Publish two to ten local photos as one Telegram album."""
+    if config.telegram is None or not config.telegram.enabled:
+        raise ValueError("Telegram notifications are not enabled")
+    photos = tuple(Path(path) for path in paths)
+    if not 2 <= len(photos) <= 10:
+        raise ValueError("Telegram media groups require between 2 and 10 photos")
+    missing = [str(path) for path in photos if not path.is_file()]
+    if missing:
+        raise FileNotFoundError(
+            "Telegram photo files are missing: " + ", ".join(missing)
+        )
+
+    media: list[dict[str, str]] = []
+    files: dict[str, Path] = {}
+    for index, path in enumerate(photos):
+        field = f"photo{index}"
+        item = {"type": "photo", "media": f"attach://{field}"}
+        if index == 0:
+            item["caption"] = caption[:1024]
+        media.append(item)
+        files[field] = path
+    result = _telegram_multipart_request(
+        config,
+        "sendMediaGroup",
+        {
+            "chat_id": config.telegram.chat_id,
+            "media": json.dumps(media),
+        },
+        files,
+    )
+    return tuple(int(message["message_id"]) for message in result)
 
 
 def publish_email(config: AwsWorkerConfig, subject: str, message: str) -> str:

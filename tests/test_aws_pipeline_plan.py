@@ -5,8 +5,12 @@ import pytest
 from recon_pipeline.workers.aws.finalizers import SageMakerShutdownFinalizer
 from recon_pipeline.workers.aws.finalizers import sagemaker_shutdown
 from recon_pipeline.workers.aws.pipeline import build_aws_pipeline
+from recon_pipeline.workers.aws.passes.restore_experiment import S3RestoreExperimentPass
 from recon_pipeline.workers.aws.status import JobStatus
 from recon_pipeline.reconstructions.nerfstudio.config import NerfstudioArtifactConfig
+from recon_pipeline.reconstructions.nerfstudio.training import (
+    SplatfactoReconstructionConfig, SplatfactoTrainingConfig,
+)
 from recon_pipeline.datasets.fourdanyone.config import FourDAnyoneConfig
 from recon_pipeline.core import PipelineContext, PipelineOutcome
 from recon_pipeline.artifacts.rerun.config import RerunConfig
@@ -73,6 +77,46 @@ def test_artifact_only_plan_restores_shared_source_once(tmp_path: Path) -> None:
     assert "fourdanyone-inference" not in ids
     assert "nerfstudio-export" in ids
     assert "rerun-export" in ids
+
+
+def test_four_frame_reconstruction_plan_restores_source_once(tmp_path: Path) -> None:
+    worker = make_worker_config(tmp_path)
+    frames = (10, 40, 80, 110)
+    config = make_pipeline_config(
+        tmp_path,
+        dataset_enabled=False,
+        nerfstudio=NerfstudioArtifactConfig(
+            enabled=True, source_experiment_name="leo-original", frames=frames,
+        ),
+        reconstruction=SplatfactoReconstructionConfig(
+            enabled=True, frames=frames, training=SplatfactoTrainingConfig(),
+        ),
+        splatfacto_env=tmp_path / "env",
+    )
+    pipeline = build_aws_pipeline(
+        worker, config, tmp_path / "job", JobStatus(job_id=worker.job_id)
+    )
+    ids = [item.id for item in pipeline.prepare().passes]
+    assert ids.count("s3-restore-experiment:leo-original") == 1
+    assert "fourdanyone-inference" not in ids
+    assert "s3-download-input" not in ids
+    assert ids[ids.index("nerfstudio-export") + 1:ids.index("write-run-manifest")] == [
+        item for frame in frames for item in (
+            f"splatfacto-train:frame_{frame:03d}",
+            f"gaussian-splat-export:frame_{frame:03d}",
+        )
+    ]
+
+
+def test_retry_never_deletes_source_experiment(tmp_path: Path) -> None:
+    source = tmp_path / "runs/leo-original"
+    generation = source / "4danyone"
+    generation.mkdir(parents=True)
+    (generation / "metadata.json").write_text("source")
+    S3RestoreExperimentPass(make_worker_config(tmp_path), "leo-original", source).cleanup(
+        PipelineContext()
+    )
+    assert (generation / "metadata.json").read_text() == "source"
 
 
 @pytest.mark.parametrize(

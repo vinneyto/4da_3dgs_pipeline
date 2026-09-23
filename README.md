@@ -38,6 +38,52 @@ Pass `--force` only when the output file may be replaced deliberately. Use
 `--job-id` to override the default new job ID or `--bucket` to move the cloned
 run to another bucket.
 
+## Reconstruct four timestamps from an existing 4DAnyone run
+
+Use a separate new JSON for **each** completed source experiment. Its original
+JSON and 4DAnyone results are left intact. The CLI disables inference and the
+dataset Rerun recording, restores the source 4DAnyone output from persistent
+storage or S3, exports four independent RGBA Nerfstudio datasets, then trains
+and exports a Splatfacto PLY for each timestamp. No video regeneration is needed.
+
+```bash
+cd "$HOME/work/4da_3dgs_pipeline"
+
+recon-config \
+  --template config/old-experiment.json \
+  --output config/old-experiment-3dgs-v1.json \
+  --experiment-name old_experiment_3dgs_v1 \
+  --reuse-4danyone-experiment old_experiment \
+  --splatfacto-frames 10 40 80 110
+
+./scripts/setup_splatfacto_env.sh config/old-experiment-3dgs-v1.json
+recon-aws-worker plan --config config/old-experiment-3dgs-v1.json
+recon-aws-worker start --config config/old-experiment-3dgs-v1.json
+```
+
+Repeat with the second source JSON, its source experiment name, and a distinct
+new experiment name and output filename. Frame indices are synchronized 4DAnyone
+timesteps in `0..120`; choose the four timestamps you want to reconstruct.
+`--video` is unnecessary when cloning for reuse. The S3 bucket and other
+settings are copied from the source JSON. Use `--splatfacto-env /absolute/path`
+to override the separate persistent conda environment path before setup.
+
+The new JSON stores every training setting under
+`pipeline.reconstruction.config.training`. `--splatfacto-profile
+4danyone_rgba_compact_v1` is the creation-time default; the saved JSON contains
+the resolved parameters, not a profile name. You can edit training values in
+the new file and run `recon-aws-worker plan` again. Input RGBA alpha is consumed
+by stock Nerfstudio 1.1.5; the pass refuses unexpected `mask_path` data. No
+Nerfstudio source patch is applied. The export uses 4DAnyone's original RGBA
+images directly; unlike the Colab `_05` experiment it does not erode alpha
+by one pixel, so results may differ slightly.
+
+Each result is in `runs/<new-experiment>/reconstruction/frame_NNN/export/splat.ply`.
+The `pipeline-result.json` manifest lists PLY paths and Gaussian counts. Results
+are also uploaded to the configured S3 run prefix when uploads are enabled.
+The separate setup requires a CUDA instance; the four training passes run
+sequentially and can take substantially longer than the earlier export stage.
+
 ## Configure a three-layer AWS run
 
 Define every value used to generate the run document:

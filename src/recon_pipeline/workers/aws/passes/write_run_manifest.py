@@ -5,7 +5,9 @@ from datetime import UTC, datetime
 
 from recon_pipeline.datasets.fourdanyone.artifacts import EXPERIMENT_WORKSPACE
 from recon_pipeline.datasets.fourdanyone.config import FourDAnyoneConfig
-from recon_pipeline.reconstructions.nerfstudio.passes import NERFSTUDIO_DATASETS
+from recon_pipeline.reconstructions.nerfstudio.passes import (
+    NERFSTUDIO_DATASETS, splat_artifact, training_artifact,
+)
 from recon_pipeline.core import PassResult, PipelineContext
 from recon_pipeline.artifacts.rerun.passes import RERUN_RECORDING
 
@@ -33,6 +35,17 @@ class WriteRunManifestPass:
             "experiment_dir": str(self.config.experiment_dir),
             "inference_dir": str(self.config.inference_dir),
             "datasets": context.artifacts.get(NERFSTUDIO_DATASETS, []),
+            "reconstructions": [
+                {
+                    "frame": frame,
+                    "ply": str(context.require(splat_artifact(frame))),
+                    "training_config": str(context.require(training_artifact(frame))),
+                    "gaussians": context.pass_results[
+                        f"gaussian-splat-export:frame_{frame:03d}"
+                    ].details["gaussians"],
+                }
+                for frame in self.config.reconstruction.frames
+            ],
             "rerun_file": (
                 str(context.artifacts[RERUN_RECORDING])
                 if RERUN_RECORDING in context.artifacts

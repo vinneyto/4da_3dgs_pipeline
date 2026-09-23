@@ -6,7 +6,9 @@ from pathlib import Path
 
 from recon_pipeline.datasets.fourdanyone.config import FourDAnyoneConfig
 from recon_pipeline.datasets.fourdanyone.passes import FourDAnyoneInferencePass, PrepareExperimentPass
-from recon_pipeline.reconstructions.nerfstudio.passes import NerfstudioExportPass
+from recon_pipeline.reconstructions.nerfstudio.passes import (
+    GaussianSplatExportPass, NerfstudioExportPass, SplatfactoTrainPass,
+)
 from recon_pipeline.core import JsonPassCheckpointStore, Pipeline
 from recon_pipeline.artifacts.rerun.passes import RerunExportPass
 
@@ -71,6 +73,10 @@ def build_aws_pipeline(
         passes.append(NerfstudioExportPass(config))
     if config.rerun.enabled:
         passes.append(RerunExportPass(config))
+    if config.reconstruction.enabled:
+        for frame in config.reconstruction.frames:
+            passes.append(SplatfactoTrainPass(config, frame))
+            passes.append(GaussianSplatExportPass(config, frame))
     passes.append(WriteRunManifestPass(config))
     if worker.upload_results:
         passes.append(S3UploadResultsPass(worker, config))

@@ -75,8 +75,8 @@ def test_paths_must_be_absolute() -> None:
         )
 
 
-def test_reconstruction_stage_is_not_silently_ignored() -> None:
-    with pytest.raises(ValueError, match="not implemented"):
+def test_reconstruction_stage_requires_explicit_training_settings() -> None:
+    with pytest.raises(ValueError, match="explicit training parameters"):
         extract_4danyone_dataset_config(
             {
                 "experiment_name": "leo",

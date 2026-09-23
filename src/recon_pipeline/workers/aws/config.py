@@ -13,7 +13,7 @@ from recon_pipeline.datasets.fourdanyone.config import FourDAnyoneConfig, extrac
 
 
 VALID_SHUTDOWN_POLICIES = frozenset({"never", "success", "failure", "always"})
-SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5, 6})
+SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5, 6, 7})
 
 
 def load_document(path: Path) -> dict[str, Any]:
@@ -312,6 +312,11 @@ def materialize_pipeline_config(
         model_dir=worker.local.model_dir,
         runs_dir=worker.local.runs_dir,
     )
+    if payload.get("reconstruction") and payload["reconstruction"].enabled:
+        environment = document.get("environment", {})
+        if not isinstance(environment, dict) or "splatfacto_env" not in environment:
+            raise ValueError("enabled reconstruction requires environment.splatfacto_env")
+        payload["splatfacto_env"] = Path(environment["splatfacto_env"])
     return FourDAnyoneConfig.from_dict(payload)
 
 

@@ -1,7 +1,6 @@
 """Restore a source experiment needed by artifact-only passes."""
 
 from pathlib import Path
-import shutil
 
 from recon_pipeline.datasets.fourdanyone.artifacts import experiment_artifact
 from recon_pipeline.core import PassResult, PipelineContext
@@ -28,9 +27,9 @@ class S3RestoreExperimentPass:
         self.provides = frozenset({experiment_artifact(experiment_name)})
 
     def cleanup(self, context: PipelineContext) -> None:
-        generation = self.destination / "4danyone"
-        if generation.exists():
-            shutil.rmtree(generation)
+        # A source experiment belongs to another run. Never delete its local
+        # generation when retrying a derived reconstruction.
+        pass
 
     def run(self, context: PipelineContext) -> PassResult:
         generation = self.destination / "4danyone"

@@ -376,3 +376,44 @@ def test_generator_supports_nerfstudio_only_run(tmp_path: Path) -> None:
     assert artifact["replace_existing"] is True
     assert pipeline.dataset_enabled is False
     assert pipeline.nerfstudio.enabled is True
+
+
+def test_clone_reuses_old_4danyone_for_four_reconstructions(tmp_path: Path) -> None:
+    template = tmp_path / "old.json"
+    output = tmp_path / "new.json"
+    main([*arguments(template), "--rerun"])
+    source = json.loads(template.read_text())
+
+    main([
+        "--template", str(template), "--output", str(output),
+        "--experiment-name", "leo-3dgs-v1",
+        "--reuse-4danyone-experiment", "leo_one_layer_24views_01",
+        "--splatfacto-frames", "10", "40", "80", "110",
+    ])
+
+    document = json.loads(output.read_text())
+    pipeline, worker = load_aws_worker_config(output)
+    assert json.loads(template.read_text()) == source
+    assert document["schema_version"] == 7
+    assert document["pipeline"]["dataset"]["enabled"] is False
+    assert document["artifacts"]["dataset"]["rerun"]["enabled"] is False
+    assert document["artifacts"]["dataset"]["nerfstudio"]["source_experiment_name"] == source["experiment_name"]
+    assert document["artifacts"]["dataset"]["nerfstudio"]["frames"] == [10, 40, 80, 110]
+    assert document["aws_worker"]["bucket"] == source["aws_worker"]["bucket"]
+    assert worker.job_id == "leo-3dgs-v1"
+    assert pipeline.reconstruction.frames == (10, 40, 80, 110)
+    assert pipeline.reconstruction.training.max_num_iterations == 60_000
+    assert "profile" not in document["pipeline"]["reconstruction"]["config"]
+
+
+def test_clone_requires_distinct_source_and_target(tmp_path: Path) -> None:
+    template = tmp_path / "old.json"
+    main(arguments(template))
+    with pytest.raises(SystemExit):
+        main([
+            "--template", str(template), "--output", str(tmp_path / "new.json"),
+            "--experiment-name", "leo_one_layer_24views_01",
+            "--reuse-4danyone-experiment", "leo_one_layer_24views_01",
+            "--splatfacto-frames", "60",
+        ])
+    assert not (tmp_path / "new.json").exists()

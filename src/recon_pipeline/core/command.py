@@ -6,6 +6,7 @@ import subprocess
 from collections import deque
 from collections.abc import Callable, Sequence
 from pathlib import Path
+from typing import Mapping
 
 
 LineCallback = Callable[[str], None]
@@ -34,6 +35,7 @@ class CommandRunner:
         *,
         cwd: Path,
         on_line: LineCallback | None = None,
+        env: Mapping[str, str] | None = None,
     ) -> None:
         process = subprocess.Popen(
             list(command),
@@ -42,6 +44,7 @@ class CommandRunner:
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
+            env=env,
         )
         assert process.stdout is not None
         output_tail: deque[str] = deque(maxlen=200)

@@ -5,17 +5,19 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Sequence
 from urllib.parse import urlparse
 
 from .config import AwsWorkerConfig, load_document, materialize_pipeline_config
+from recon_pipeline.reconstructions.nerfstudio.training import SplatfactoTrainingConfig
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="recon-config",
-        description="Generate a validated schema-v6 JSON document for recon-aws-worker.",
+        description="Generate a validated AWS worker run document.",
     )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--force", action="store_true", help="Replace an existing output file")
@@ -61,6 +63,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     environment.add_argument("--opencv-fallback-version", default="4.14.0.94")
     environment.add_argument(
+        "--splatfacto-env", type=Path,
+        default=Path("/home/sagemaker-user/.conda/envs/splatfacto"),
+        help="Separate persistent Nerfstudio 1.1.5 environment",
+    )
+    environment.add_argument(
         "--lock-file",
         type=Path,
         default=Path(
@@ -86,6 +93,10 @@ def build_parser() -> argparse.ArgumentParser:
     pipeline.add_argument("--turbo", action=argparse.BooleanOptionalAction, default=True)
     pipeline.add_argument("--attention-backend", default="auto")
     pipeline.add_argument("--resume", action=argparse.BooleanOptionalAction, default=False)
+    pipeline.add_argument(
+        "--reuse-4danyone-experiment",
+        help="Clone an existing run, skip 4DAnyone inference, and export selected frames from it",
+    )
 
     nerfstudio = parser.add_argument_group("Nerfstudio dataset artifact")
     nerfstudio.add_argument(
@@ -118,6 +129,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     nerfstudio.add_argument("--frame", type=int, help=argparse.SUPPRESS)
     nerfstudio.add_argument("--export-device", help=argparse.SUPPRESS)
+    reconstruction = parser.add_argument_group("3DGS reconstruction")
+    reconstruction.add_argument(
+        "--splatfacto", action=argparse.BooleanOptionalAction, default=None,
+    )
+    reconstruction.add_argument("--splatfacto-frames", type=int, nargs="+")
+    reconstruction.add_argument(
+        "--splatfacto-profile", choices=("4danyone_rgba_compact_v1",),
+        default="4danyone_rgba_compact_v1",
+        help="Expanded into explicit training parameters in the saved JSON",
+    )
     pipeline.add_argument(
         "--rerun",
         action=argparse.BooleanOptionalAction,
@@ -266,8 +287,16 @@ def _replace_artifact_source_experiment(
 def build_document_from_template(args: argparse.Namespace) -> dict[str, Any]:
     if not args.experiment_name:
         raise ValueError("--template requires --experiment-name")
-    if not args.video:
+    if not args.video and not args.reuse_4danyone_experiment:
         raise ValueError("--template requires --video")
+    if args.reuse_4danyone_experiment and not args.splatfacto_frames:
+        raise ValueError("--reuse-4danyone-experiment requires --splatfacto-frames")
+    if args.reuse_4danyone_experiment and args.splatfacto is False:
+        raise ValueError("--reuse-4danyone-experiment cannot use --no-splatfacto")
+    if args.splatfacto_frames and not args.reuse_4danyone_experiment and args.splatfacto is not True:
+        raise ValueError("--splatfacto-frames requires --splatfacto")
+    if args.reuse_4danyone_experiment == args.experiment_name:
+        raise ValueError("source and target experiment names must differ")
 
     document = load_document(args.template)
     previous_experiment_name = document.get("experiment_name")
@@ -284,7 +313,8 @@ def build_document_from_template(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("template must use the schema-v6 aws_worker.bucket object")
 
     worker_payload["job_id"] = args.job_id or args.experiment_name
-    bucket_payload["video"] = args.video
+    if args.video:
+        bucket_payload["video"] = args.video
     if args.bucket:
         bucket_payload["name"] = args.bucket
     _replace_artifact_source_experiment(
@@ -292,6 +322,27 @@ def build_document_from_template(args: argparse.Namespace) -> dict[str, Any]:
         previous_experiment_name=previous_experiment_name,
         experiment_name=args.experiment_name,
     )
+    if args.reuse_4danyone_experiment:
+        source = args.reuse_4danyone_experiment
+        document["pipeline"]["dataset"]["enabled"] = False
+        export = document["artifacts"]["dataset"]["nerfstudio"]
+        export.update(enabled=True, source_experiment_name=source,
+                      frames=args.splatfacto_frames, replace_existing=False)
+        document["artifacts"]["dataset"]["rerun"]["enabled"] = False
+    if args.splatfacto_frames and not args.reuse_4danyone_experiment:
+        document["artifacts"]["dataset"]["nerfstudio"]["frames"] = args.splatfacto_frames
+    if args.splatfacto is True or args.reuse_4danyone_experiment:
+        frames = args.splatfacto_frames or document["artifacts"]["dataset"]["nerfstudio"]["frames"]
+        document["pipeline"]["reconstruction"] = {
+            "enabled": True, "type": "nerfstudio_splatfacto",
+            "config": {"frames": frames, "training": asdict(SplatfactoTrainingConfig())},
+        }
+        document.setdefault("environment", {})["splatfacto_env"] = str(args.splatfacto_env)
+    elif args.splatfacto is False:
+        document["pipeline"]["reconstruction"] = {
+            "enabled": False, "type": "nerfstudio_splatfacto", "config": {},
+        }
+    document["schema_version"] = 7 if document["pipeline"]["reconstruction"]["enabled"] else document["schema_version"]
 
     worker = AwsWorkerConfig.from_document(document)
     materialize_pipeline_config(document, worker)
@@ -301,6 +352,10 @@ def build_document_from_template(args: argparse.Namespace) -> dict[str, Any]:
 def build_document(args: argparse.Namespace) -> dict[str, Any]:
     if args.template:
         return build_document_from_template(args)
+    if args.reuse_4danyone_experiment:
+        raise ValueError("--reuse-4danyone-experiment requires --template")
+    if args.splatfacto_frames and args.splatfacto is not True:
+        raise ValueError("--splatfacto-frames requires --splatfacto")
     if not args.experiment_name:
         raise ValueError("--experiment-name is required")
     if not args.video and not args.s3_video_path:
@@ -338,7 +393,7 @@ def build_document(args: argparse.Namespace) -> dict[str, Any]:
     bucket, video = _resolve_video(args)
     job_id = args.job_id or args.experiment_name
     document: dict[str, Any] = {
-        "schema_version": 6,
+        "schema_version": 7 if args.splatfacto else 6,
         "environment": {
             "conda_bootstrap": str(args.conda_bootstrap),
             "conda_env": str(args.conda_env),
@@ -351,6 +406,7 @@ def build_document(args: argparse.Namespace) -> dict[str, Any]:
             "torch_index_url": args.torch_index_url,
             "opencv_fallback_version": args.opencv_fallback_version,
             "lock_file": str(args.lock_file),
+            **({"splatfacto_env": str(args.splatfacto_env)} if args.splatfacto else {}),
         },
         "experiment_name": args.experiment_name,
         "pipeline": {
@@ -370,9 +426,13 @@ def build_document(args: argparse.Namespace) -> dict[str, Any]:
                 },
             },
             "reconstruction": {
-                "enabled": False,
+                "enabled": bool(args.splatfacto),
                 "type": "nerfstudio_splatfacto",
-                "config": {},
+                "config": (
+                    {"frames": args.splatfacto_frames or args.nerfstudio_frames,
+                     "training": asdict(SplatfactoTrainingConfig())}
+                    if args.splatfacto else {}
+                ),
             },
         },
         "artifacts": {
@@ -386,7 +446,7 @@ def build_document(args: argparse.Namespace) -> dict[str, Any]:
                     "frames": (
                         [args.frame]
                         if args.frame is not None
-                        else args.nerfstudio_frames
+                        else (args.splatfacto_frames or args.nerfstudio_frames)
                     ),
                     "device": args.export_device or args.nerfstudio_device,
                     "replace_existing": args.nerfstudio_replace_existing,
@@ -491,7 +551,10 @@ def main(argv: Sequence[str] | None = None) -> None:
     )
     print(f"Wrote AWS worker config: {args.output}")
     print(f"Job: {document['aws_worker']['job_id']}")
-    print(f"Input: s3://{bucket_config['name']}/{video_key}")
+    if document["pipeline"]["dataset"]["enabled"]:
+        print(f"Input: s3://{bucket_config['name']}/{video_key}")
+    else:
+        print("Input video: skipped (dataset stage disabled)")
     print(f"Target views: {total_views}")
     print(
         "Dataset stage: "
@@ -505,6 +568,9 @@ def main(argv: Sequence[str] | None = None) -> None:
         "Dataset Rerun artifact: "
         f"{'enabled' if document['artifacts']['dataset']['rerun']['enabled'] else 'disabled'}"
     )
+    reconstruction = document["pipeline"]["reconstruction"]
+    if reconstruction["enabled"]:
+        print(f"Splatfacto frames: {reconstruction['config']['frames']}")
 
 
 if __name__ == "__main__":

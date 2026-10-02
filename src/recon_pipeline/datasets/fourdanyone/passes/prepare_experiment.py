@@ -1,7 +1,8 @@
-"""Prepare the persistent workspace for one 4DAnyone experiment."""
+"""Launch the standalone workspace preparation utility."""
 
 from recon_pipeline.core import PassResult, PipelineContext
-
+from recon_pipeline.core.command import CommandRunner
+from recon_pipeline.core.utility import run_utility
 from ..artifacts import EXPERIMENT_WORKSPACE
 from ..config import FourDAnyoneConfig
 
@@ -12,19 +13,20 @@ class PrepareExperimentPass:
     requires = frozenset()
     provides = frozenset({EXPERIMENT_WORKSPACE})
 
-    def __init__(self, config: FourDAnyoneConfig) -> None:
+    def __init__(
+        self, config: FourDAnyoneConfig, *, runner: CommandRunner | None = None
+    ) -> None:
         self.config = config
-
-    def cleanup(self, context: PipelineContext) -> None:
-        config_path = self.config.experiment_dir / "pipeline-config.json"
-        if config_path.exists():
-            config_path.unlink()
+        self.runner = runner or CommandRunner()
 
     def run(self, context: PipelineContext) -> PassResult:
-        self.config.experiment_dir.mkdir(parents=True, exist_ok=True)
-        config_path = self.config.experiment_dir / "pipeline-config.json"
-        self.config.write_json(config_path)
+        result = run_utility(
+            "recon_pipeline.datasets.fourdanyone.utilities.prepare_experiment",
+            [],
+            context,
+            runner=self.runner,
+            documents={"--pipeline-config": self.config.to_dict()},
+        )
         return PassResult(
-            artifacts={EXPERIMENT_WORKSPACE: self.config.experiment_dir},
-            details={"path": str(self.config.experiment_dir)},
+            artifacts={EXPERIMENT_WORKSPACE: self.config.experiment_dir}, details=result
         )

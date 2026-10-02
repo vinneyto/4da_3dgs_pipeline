@@ -1,13 +1,12 @@
-"""Restore a source experiment needed by artifact-only passes."""
+"""Launch the source experiment restoration utility."""
 
 from pathlib import Path
-import shutil
 
-from recon_pipeline.datasets.fourdanyone.artifacts import experiment_artifact
 from recon_pipeline.core import PassResult, PipelineContext
-
+from recon_pipeline.core.command import CommandRunner
+from recon_pipeline.core.utility import run_utility
+from recon_pipeline.datasets.fourdanyone.artifacts import experiment_artifact
 from ..artifacts import AWS_HEALTH
-from ..aws import sync_experiment_results
 from ..config import AwsWorkerConfig
 
 
@@ -19,33 +18,32 @@ class S3RestoreExperimentPass:
         worker: AwsWorkerConfig,
         experiment_name: str,
         destination: Path,
+        *,
+        runner: CommandRunner | None = None,
     ) -> None:
         self.worker = worker
         self.experiment_name = experiment_name
         self.destination = destination
+        self.runner = runner or CommandRunner()
         self.id = f"s3-restore-experiment:{experiment_name}"
         self.name = f"Restore source experiment {experiment_name}"
         self.provides = frozenset({experiment_artifact(experiment_name)})
 
-    def cleanup(self, context: PipelineContext) -> None:
-        generation = self.destination / "4danyone"
-        if generation.exists():
-            shutil.rmtree(generation)
-
     def run(self, context: PipelineContext) -> PassResult:
-        generation = self.destination / "4danyone"
-        required = (generation / "metadata.json", generation / "cameras.json")
-        if all(path.is_file() for path in required):
-            found = downloaded = 0
-            message = "Reusing source experiment from persistent storage"
-        else:
-            context.report_progress(0.0, "Restoring source experiment from S3")
-            found, downloaded = sync_experiment_results(
-                self.worker, self.experiment_name, self.destination
-            )
-            message = "Source experiment restored"
-        context.report_progress(1.0, message)
+        result = run_utility(
+            "recon_pipeline.workers.aws.utilities.restore_experiment",
+            [
+                "--experiment",
+                self.experiment_name,
+                "--destination",
+                str(self.destination),
+                "--replace-existing",
+            ],
+            context,
+            runner=self.runner,
+            documents={"--worker-config": self.worker.to_dict()},
+        )
         return PassResult(
-            artifacts={experiment_artifact(self.experiment_name): generation},
-            details={"objects": found, "downloaded": downloaded, "path": str(generation)},
+            artifacts={experiment_artifact(self.experiment_name): Path(result["path"])},
+            details=result,
         )

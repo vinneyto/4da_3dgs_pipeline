@@ -1,10 +1,12 @@
-"""Download the configured input video from S3."""
+"""Launch the input video download utility."""
 
-from recon_pipeline.datasets.fourdanyone.artifacts import INPUT_VIDEO
+from pathlib import Path
+
 from recon_pipeline.core import PassResult, PipelineContext
-
+from recon_pipeline.core.command import CommandRunner
+from recon_pipeline.core.utility import run_utility
+from recon_pipeline.datasets.fourdanyone.artifacts import INPUT_VIDEO
 from ..artifacts import AWS_HEALTH
-from ..aws import download_input_video
 from ..config import AwsWorkerConfig
 
 
@@ -14,22 +16,18 @@ class S3DownloadInputPass:
     requires = frozenset({AWS_HEALTH})
     provides = frozenset({INPUT_VIDEO})
 
-    def __init__(self, worker: AwsWorkerConfig) -> None:
+    def __init__(
+        self, worker: AwsWorkerConfig, *, runner: CommandRunner | None = None
+    ) -> None:
         self.worker = worker
-
-    def cleanup(self, context: PipelineContext) -> None:
-        path = self.worker.local_video_path
-        if path.exists():
-            path.unlink()
-        temporary = path.with_suffix(path.suffix + ".download")
-        if temporary.exists():
-            temporary.unlink()
+        self.runner = runner or CommandRunner()
 
     def run(self, context: PipelineContext) -> PassResult:
-        context.report_progress(0.0, f"Downloading {self.worker.video_s3_uri}")
-        path = download_input_video(self.worker)
-        context.report_progress(1.0, f"Input video ready at {path}")
-        return PassResult(
-            artifacts={INPUT_VIDEO: path},
-            details={"s3_uri": self.worker.video_s3_uri, "path": str(path)},
+        result = run_utility(
+            "recon_pipeline.workers.aws.utilities.download_input",
+            ["--replace-existing"],
+            context,
+            runner=self.runner,
+            documents={"--worker-config": self.worker.to_dict()},
         )
+        return PassResult(artifacts={INPUT_VIDEO: Path(result["path"])}, details=result)

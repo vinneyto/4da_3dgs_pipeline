@@ -168,6 +168,124 @@ Telegram notifications are event-driven: one startup plan, then pass start,
 completion, or failure messages with a compact CPU/RAM/disk/GPU snapshot. There
 is no periodic resource polling or live log streaming.
 
+## Debug one operation at a time
+
+Every pass launches one Python utility in a separate process. Each utility has
+its own file under the owning package's `utilities/` directory, its own console
+command, and a `python -m` entry point. The pass supplies arguments and maps JSON
+results and progress back to the pipeline; the operation and output cleanup live
+in the utility.
+
+| Operation | Console command | Module under `recon_pipeline` |
+| --- | --- | --- |
+| Prepare workspace | `recon-prepare-experiment` | `datasets.fourdanyone.utilities.prepare_experiment` |
+| Generate dataset | `recon-4danyone` | `datasets.fourdanyone.utilities.inference` |
+| Export synchronized frames | `recon-nerfstudio-export` | `reconstructions.nerfstudio.utilities.export` |
+| Export recording | `recon-rerun` | `artifacts.rerun.utilities.export` |
+| Check AWS dependencies | `recon-aws-preflight` | `workers.aws.utilities.preflight` |
+| Download video | `recon-s3-download-input` | `workers.aws.utilities.download_input` |
+| Sync model cache | `recon-s3-sync-models` | `workers.aws.utilities.sync_models` |
+| Restore source experiment | `recon-s3-restore-experiment` | `workers.aws.utilities.restore_experiment` |
+| Write manifest | `recon-write-run-manifest` | `workers.aws.utilities.write_run_manifest` |
+| Upload results | `recon-s3-upload-results` | `workers.aws.utilities.upload_results` |
+
+Inspect or debug a single utility without starting the worker:
+
+```bash
+recon-4danyone --help
+python -m recon_pipeline.datasets.fourdanyone.utilities.inference --help
+python -m pdb -m recon_pipeline.datasets.fourdanyone.utilities.inference --help
+```
+
+AWS utilities accept `--worker-config`: either the existing run JSON or a JSON
+object containing just the AWS worker settings. Local generation and export
+commands use explicit paths and do not need AWS settings.
+
+```bash
+export RECON_EXPERIMENT_DIR="$RECON_DATA_ROOT/runs/$RECON_EXPERIMENT_NAME"
+export RECON_GENERATION_DIR="$RECON_EXPERIMENT_DIR/4danyone"
+export RECON_VIDEO_PATH="$RECON_DATA_ROOT/input/$RECON_VIDEO"
+export RECON_MODEL_DIR="$RECON_DATA_ROOT/models"
+export RECON_MATERIALIZED_CONFIG="$RECON_EXPERIMENT_DIR/pipeline-config.json"
+export RECON_RERUN_PATH="$RECON_EXPERIMENT_DIR/rerun/$RECON_EXPERIMENT_NAME.rrd"
+
+recon-aws-preflight \
+  --worker-config "$RECON_RUN_CONFIG" \
+  --require-input-video
+
+recon-s3-download-input --worker-config "$RECON_RUN_CONFIG"
+recon-s3-sync-models --worker-config "$RECON_RUN_CONFIG"
+
+# Prepare a new workspace from a local run config with absolute paths.
+# Alternatively, use a pipeline-config.json saved by an earlier run.
+export RECON_LOCAL_CONFIG="$RECON_PIPELINE_ROOT/config/local-run.example.json"
+recon-prepare-experiment --pipeline-config "$RECON_LOCAL_CONFIG"
+
+recon-4danyone \
+  --fourdanyone-root "$RECON_FOURDANYONE_ROOT" \
+  --video "$RECON_VIDEO_PATH" \
+  --output "$RECON_GENERATION_DIR" \
+  --model-dir "$RECON_MODEL_DIR" \
+  --views-per-layer "$RECON_VIEWS_PER_LAYER" \
+  --layer-pitches "${RECON_LAYER_PITCHES[@]}" \
+  --start-yaw "$RECON_START_YAW" \
+  --yaw-span "$RECON_YAW_SPAN" \
+  --target-fps "$RECON_TARGET_FPS" \
+  --seed "$RECON_SEED" \
+  --turbo \
+  --attention-backend "$RECON_ATTENTION_BACKEND"
+
+recon-nerfstudio-export \
+  --fourdanyone-root "$RECON_FOURDANYONE_ROOT" \
+  --generation "$RECON_GENERATION_DIR" \
+  --output "$RECON_EXPERIMENT_DIR/nerfstudio" \
+  --model-dir "$RECON_MODEL_DIR" \
+  --frames "${RECON_NERFSTUDIO_FRAMES[@]}" \
+  --device "$RECON_NERFSTUDIO_DEVICE"
+
+recon-rerun \
+  --generation "$RECON_GENERATION_DIR" \
+  --output "$RECON_RERUN_PATH" \
+  --experiment "$RECON_EXPERIMENT_NAME" \
+  --fourdanyone-root "$RECON_FOURDANYONE_ROOT" \
+  --model-dir "$RECON_MODEL_DIR" \
+  --view-count "$RECON_RERUN_VIEW_COUNT" \
+  --device "$RECON_RERUN_DEVICE"
+
+# Restore a prior experiment instead of generating a new dataset.
+export RECON_SOURCE_EXPERIMENT="leo_three_layers_72views_01"
+recon-s3-restore-experiment \
+  --worker-config "$RECON_RUN_CONFIG" \
+  --experiment "$RECON_SOURCE_EXPERIMENT" \
+  --destination "$RECON_DATA_ROOT/runs/$RECON_SOURCE_EXPERIMENT"
+
+recon-write-run-manifest \
+  --pipeline-config "$RECON_MATERIALIZED_CONFIG" \
+  --rerun-file "$RECON_RERUN_PATH"
+
+recon-s3-upload-results \
+  --worker-config "$RECON_RUN_CONFIG" \
+  --experiment "$RECON_EXPERIMENT_NAME" \
+  --source "$RECON_EXPERIMENT_DIR"
+```
+
+Edit the example local config's absolute paths, experiment name and parameters
+before preparing a new workspace. The materialized `pipeline-config.json` is
+also produced automatically by the pipeline's preparation pass.
+
+For an existing inference directory, frame dataset or recording, explicitly
+pass `--replace-existing` to rebuild it. On downloads/restores the flag discards
+the operation's owned local output; on uploads it deletes only the selected
+experiment's S3 result prefix before uploading. The pipeline supplies this flag
+for passes it reruns, preserving checkpoint/`--force` behavior. Shared model
+caches are retained.
+
+Every utility prints its JSON result after its logs, or writes it to
+`--result-file PATH`. Progress is streamed as `RECON_PROGRESS` JSON lines.
+For a manifest with frame datasets and timings, supply `--datasets PATH` (a JSON
+list of `frame`/`dataset_dir` objects) and `--durations PATH` (a JSON object of pass
+IDs and seconds). Both are optional for manual debugging.
+
 ## Validate and inspect
 
 ```bash

@@ -17,7 +17,9 @@ def test_core_package_has_no_aws_dependency() -> None:
     for path in core.glob("*.py"):
         source = path.read_text().lower()
         for token in forbidden:
-            assert token not in source, f"{path.name} crosses the AWS boundary via {token!r}"
+            assert (
+                token not in source
+            ), f"{path.name} crosses the AWS boundary via {token!r}"
 
 
 def test_aws_worker_is_a_separate_package() -> None:
@@ -66,4 +68,23 @@ def test_only_aws_worker_exposes_a_pipeline_cli() -> None:
     project = Path(__file__).parents[1]
     pyproject = (project / "pyproject.toml").read_text()
     assert "recon-aws-worker" in pyproject
-    assert 'recon-pipeline = ' not in pyproject
+    assert "recon-pipeline = " not in pyproject
+
+
+def test_passes_only_launch_utilities_and_map_results() -> None:
+    root = Path(__file__).parents[1] / "src/recon_pipeline"
+    for path in root.glob("**/passes/*.py"):
+        if path.name == "__init__.py":
+            continue
+        source = path.read_text()
+        assert "run_utility(" in source, f"{path} must launch a standalone utility"
+        for forbidden in (
+            "import shutil",
+            "import boto3",
+            "RerunExporter",
+            ".write_text(",
+            ".unlink(",
+            ".mkdir(",
+            "from ..aws import",
+        ):
+            assert forbidden not in source, f"{path} embeds an operation: {forbidden}"

@@ -1,17 +1,16 @@
-"""Build a Rerun recording from a recovered 4DAnyone experiment."""
+"""Launch the standalone Rerun recording utility."""
 
-from __future__ import annotations
+from pathlib import Path
 
+from recon_pipeline.core import PassResult, PipelineContext
+from recon_pipeline.core.command import CommandRunner
+from recon_pipeline.core.utility import run_utility
 from recon_pipeline.datasets.fourdanyone.artifacts import (
     EXPERIMENT_WORKSPACE,
     MODEL_CACHE,
     experiment_artifact,
 )
 from recon_pipeline.datasets.fourdanyone.config import FourDAnyoneConfig
-from recon_pipeline.core import PassResult, PipelineContext
-
-from ..exporter import RerunExporter
-
 
 RERUN_RECORDING = "dataset.rerun"
 
@@ -21,8 +20,11 @@ class RerunExportPass:
     name = "Rerun dataset recording"
     provides = frozenset({RERUN_RECORDING})
 
-    def __init__(self, config: FourDAnyoneConfig) -> None:
+    def __init__(
+        self, config: FourDAnyoneConfig, *, runner: CommandRunner | None = None
+    ) -> None:
         self.config = config
+        self.runner = runner or CommandRunner()
         self.requires = frozenset(
             {
                 EXPERIMENT_WORKSPACE,
@@ -31,27 +33,30 @@ class RerunExportPass:
             }
         )
 
-    def cleanup(self, context: PipelineContext) -> None:
-        if self.config.rerun_path.exists():
-            self.config.rerun_path.unlink()
-
     def run(self, context: PipelineContext) -> PassResult:
-        path = self.config.rerun_path
-        def progress(current: int, total: int, message: str) -> None:
-            context.report_progress(current / total, message)
-
-        context.report_progress(0.0, "Building camera and skeleton recording")
-        path = RerunExporter(
-            generation=self.config.rerun_generation_dir,
-            output=path,
-            experiment=self.config.experiment_name,
-            fourdanyone_root=self.config.fourdanyone_root,
-            model_dir=self.config.model_dir,
-            view_count=self.config.rerun.view_count,
-            device=self.config.rerun.device,
-            on_progress=progress,
-        ).export()
+        config = self.config
+        result = run_utility(
+            "recon_pipeline.artifacts.rerun.utilities.export",
+            [
+                "--generation",
+                str(config.rerun_generation_dir),
+                "--output",
+                str(config.rerun_path),
+                "--experiment",
+                config.experiment_name,
+                "--fourdanyone-root",
+                str(config.fourdanyone_root),
+                "--model-dir",
+                str(config.model_dir),
+                "--view-count",
+                str(config.rerun.view_count),
+                "--device",
+                config.rerun.device,
+                "--replace-existing",
+            ],
+            context,
+            runner=self.runner,
+        )
         return PassResult(
-            artifacts={RERUN_RECORDING: path},
-            details={"path": str(path)},
+            artifacts={RERUN_RECORDING: Path(result["path"])}, details=result
         )

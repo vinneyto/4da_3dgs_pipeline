@@ -26,15 +26,15 @@ def test_native_inference_progress_maps_to_overall_range(tmp_path: Path) -> None
     pipeline_pass = FourDAnyoneInferencePass(make_config(tmp_path))
     pipeline_pass._handle_line(
         context,
-        "FOURDA_PROGRESS " + json.dumps({"fraction": 0.45, "message": "Generating target-view videos"})
+        "FOURDA_PROGRESS "
+        + json.dumps({"fraction": 0.45, "message": "Generating target-view videos"}),
     )
     assert updates == [(0.45, "Generating target-view videos")]
 
 
-def test_export_command_uses_official_exporter(tmp_path: Path) -> None:
+def test_export_pass_forwards_frame_and_source_arguments(tmp_path: Path) -> None:
     config = make_config(tmp_path)
-    command = NerfstudioExportPass(config).build_command(60)
-    assert command[1].endswith("scripts/export_nerfstudio.py")
-    assert command[command.index("--frame_index") + 1] == "60"
-    assert command[command.index("--device") + 1] == "cuda:0"
-    assert command[command.index("--data_dir") + 1].endswith("runs/test/4danyone")
+    arguments = NerfstudioExportPass(config).arguments()
+    assert arguments[arguments.index("--frames") + 1] == "60"
+    assert arguments[arguments.index("--device") + 1] == "cuda:0"
+    assert arguments[arguments.index("--generation") + 1].endswith("runs/test/4danyone")

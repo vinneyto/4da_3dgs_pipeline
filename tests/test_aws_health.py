@@ -239,66 +239,6 @@ def test_notification_failure_is_returned_instead_of_raised(monkeypatch, tmp_pat
     assert result == {"telegram": "skipped: denied"}
 
 
-def test_telegram_message_can_be_replaced_in_place(monkeypatch, tmp_path) -> None:
-    config = replace(
-        make_config(tmp_path),
-        sns=None,
-        telegram=TelegramConfig(chat_id="123456", bot_token="test-token"),
-    )
-    requests: list[tuple[str, dict]] = []
-
-    def request(_config, method, payload, **_kwargs):
-        requests.append((method, payload))
-        return {"message_id": 42} if method == "sendMessage" else {}
-
-    monkeypatch.setattr(aws, "_telegram_request", request)
-
-    message_id = aws.publish_telegram(config, "🔵 Pass started", "CPU: test")
-    aws.edit_telegram(config, message_id, "✅ Pass completed", "Duration: 1.0s")
-
-    assert message_id == 42
-    assert requests == [
-        (
-            "sendMessage",
-            {"chat_id": "123456", "text": "🔵 Pass started\n\nCPU: test"},
-        ),
-        (
-            "editMessageText",
-            {
-                "chat_id": "123456",
-                "message_id": "42",
-                "text": "✅ Pass completed\n\nDuration: 1.0s",
-            },
-        ),
-    ]
-
-
-def test_telegram_photos_are_sent_as_one_media_group(monkeypatch, tmp_path) -> None:
-    config = replace(
-        make_config(tmp_path),
-        sns=None,
-        telegram=TelegramConfig(chat_id="123456", bot_token="test-token"),
-    )
-    paths = tuple(tmp_path / f"camera-{index}.jpg" for index in range(4))
-    for path in paths:
-        path.write_bytes(b"jpeg")
-    requests = []
-
-    def request(_config, method, fields, files):
-        requests.append((method, fields, files))
-        return [{"message_id": 80 + index} for index in range(4)]
-
-    monkeypatch.setattr(aws, "_telegram_multipart_request", request)
-
-    message_ids = aws.publish_telegram_photos(config, paths, "4DAnyone previews")
-
-    assert message_ids == (80, 81, 82, 83)
-    assert requests[0][0] == "sendMediaGroup"
-    assert requests[0][1]["chat_id"] == "123456"
-    assert tuple(requests[0][2].values()) == paths
-    assert '"caption": "4DAnyone previews"' in requests[0][1]["media"]
-
-
 def test_health_check_skips_sagemaker_when_shutdown_is_disabled(monkeypatch, tmp_path) -> None:
     fake = FakeBoto3()
     monkeypatch.setattr(aws, "_boto3", lambda: fake)

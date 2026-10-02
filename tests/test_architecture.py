@@ -17,7 +17,9 @@ def test_core_package_has_no_aws_dependency() -> None:
     for path in core.glob("*.py"):
         source = path.read_text().lower()
         for token in forbidden:
-            assert token not in source, f"{path.name} crosses the AWS boundary via {token!r}"
+            assert (
+                token not in source
+            ), f"{path.name} crosses the AWS boundary via {token!r}"
 
 
 def test_aws_worker_is_a_separate_package() -> None:
@@ -31,7 +33,7 @@ def test_aws_worker_is_a_separate_package() -> None:
     assert not (namespace / "core/worker.py").exists()
     assert (namespace / "reconstructions/nerfstudio/config.py").is_file()
     assert (namespace / "reconstructions/nerfstudio/passes/export.py").is_file()
-    assert (namespace / "artifacts/rerun/exporter.py").is_file()
+    assert (namespace / "utilities/artefacts/rerun/exporter.py").is_file()
     assert (namespace / "artifacts/rerun/passes/export.py").is_file()
     for package in (
         namespace / "datasets/fourdanyone",
@@ -66,4 +68,52 @@ def test_only_aws_worker_exposes_a_pipeline_cli() -> None:
     project = Path(__file__).parents[1]
     pyproject = (project / "pyproject.toml").read_text()
     assert "recon-aws-worker" in pyproject
-    assert 'recon-pipeline = ' not in pyproject
+    assert "recon-pipeline = " not in pyproject
+
+
+def test_passes_only_launch_utilities_and_map_results() -> None:
+    root = Path(__file__).parents[1] / "src/recon_pipeline"
+    for path in root.glob("**/passes/*.py"):
+        if path.name == "__init__.py":
+            continue
+        source = path.read_text()
+        for node in ast.walk(ast.parse(source)):
+            if isinstance(node, ast.ImportFrom) and node.module == "aws":
+                assert {alias.name for alias in node.names} <= {
+                    "check_notification_channels"
+                }, f"{path} imports a worker operation instead of a utility"
+        assert "run_utility(" in source, f"{path} must launch a standalone utility"
+        for forbidden in (
+            "import shutil",
+            "import boto3",
+            "RerunExporter",
+            ".write_text(",
+            ".unlink(",
+            ".mkdir(",
+        ):
+            assert forbidden not in source, f"{path} embeds an operation: {forbidden}"
+
+
+def test_operation_utilities_have_no_execution_config_dependencies() -> None:
+    root = Path(__file__).parents[1] / "src/recon_pipeline"
+    sources = list((root / "utilities").rglob("*.py"))
+    for path in sources:
+        source = path.read_text()
+        for forbidden in (
+            "AwsWorkerConfig",
+            "FourDAnyoneConfig",
+            "PipelineContext",
+            "PassResult",
+            "recon_pipeline.core",
+            "recon_pipeline.workers",
+            "--worker-config",
+            "--pipeline-config",
+            "--result-file",
+            "telegram",
+            "telebot",
+            "notification",
+            "sns",
+        ):
+            assert (
+                forbidden not in source
+            ), f"{path} depends on orchestration: {forbidden}"

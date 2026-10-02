@@ -252,6 +252,6 @@ class RerunExporter:
             make_active=True,
             make_default=True,
         )
-        # Finalize the recording before an AWS worker starts uploading its directory.
+        # Flush the recording before returning its completed artifact path.
         rr.disconnect()
         return self.output

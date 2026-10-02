@@ -1,7 +1,10 @@
-"""Prepare the persistent workspace for one 4DAnyone experiment."""
+"""Launch the standalone workspace preparation utility."""
+
+import json
 
 from recon_pipeline.core import PassResult, PipelineContext
-
+from recon_pipeline.core.command import CommandRunner
+from recon_pipeline.core.utility import run_utility
 from ..artifacts import EXPERIMENT_WORKSPACE
 from ..config import FourDAnyoneConfig
 
@@ -12,19 +15,27 @@ class PrepareExperimentPass:
     requires = frozenset()
     provides = frozenset({EXPERIMENT_WORKSPACE})
 
-    def __init__(self, config: FourDAnyoneConfig) -> None:
+    def __init__(
+        self, config: FourDAnyoneConfig, *, runner: CommandRunner | None = None
+    ) -> None:
         self.config = config
-
-    def cleanup(self, context: PipelineContext) -> None:
-        config_path = self.config.experiment_dir / "pipeline-config.json"
-        if config_path.exists():
-            config_path.unlink()
+        self.runner = runner or CommandRunner()
 
     def run(self, context: PipelineContext) -> PassResult:
-        self.config.experiment_dir.mkdir(parents=True, exist_ok=True)
-        config_path = self.config.experiment_dir / "pipeline-config.json"
-        self.config.write_json(config_path)
+        result = run_utility(
+            "recon_pipeline.utilities.datasets.fourdanyone.prepare_experiment",
+            [
+                "--directory",
+                str(self.config.experiment_dir),
+                "--settings-output",
+                str(self.config.experiment_dir / "pipeline-config.json"),
+                "--settings",
+                json.dumps(self.config.to_dict()),
+            ],
+            context,
+            runner=self.runner,
+        )
         return PassResult(
             artifacts={EXPERIMENT_WORKSPACE: self.config.experiment_dir},
-            details={"path": str(self.config.experiment_dir)},
+            details={"path": result["path"]},
         )

@@ -1,10 +1,12 @@
-"""Synchronize the persistent local model cache from S3."""
+"""Launch the persistent model synchronization utility."""
 
-from recon_pipeline.datasets.fourdanyone.artifacts import MODEL_CACHE
+from pathlib import Path
+
 from recon_pipeline.core import PassResult, PipelineContext
-
+from recon_pipeline.core.command import CommandRunner
+from recon_pipeline.core.utility import run_utility
+from recon_pipeline.datasets.fourdanyone.artifacts import MODEL_CACHE
 from ..artifacts import AWS_HEALTH
-from ..aws import sync_model_objects
 from ..config import AwsWorkerConfig
 
 
@@ -14,14 +16,30 @@ class S3SyncModelsPass:
     requires = frozenset({AWS_HEALTH})
     provides = frozenset({MODEL_CACHE})
 
-    def __init__(self, worker: AwsWorkerConfig) -> None:
+    def __init__(
+        self, worker: AwsWorkerConfig, *, runner: CommandRunner | None = None
+    ) -> None:
         self.worker = worker
+        self.runner = runner or CommandRunner()
 
     def run(self, context: PipelineContext) -> PassResult:
-        context.report_progress(0.0, "Synchronizing model objects")
-        found, downloaded = sync_model_objects(self.worker)
-        context.report_progress(1.0, "Model cache is ready")
+        result = run_utility(
+            "recon_pipeline.utilities.storage.s3.sync_models",
+            [
+                "--bucket",
+                self.worker.bucket_name,
+                "--prefix",
+                self.worker.models_prefix,
+                "--destination",
+                str(self.worker.local.model_dir),
+                "--region",
+                self.worker.region,
+                "--sync" if self.worker.sync_models else "--no-sync",
+            ],
+            context,
+            runner=self.runner,
+        )
         return PassResult(
-            artifacts={MODEL_CACHE: self.worker.local.model_dir},
-            details={"objects": found, "downloaded": downloaded},
+            artifacts={MODEL_CACHE: Path(result["path"])},
+            details={"objects": result["objects"], "downloaded": result["downloaded"]},
         )

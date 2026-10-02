@@ -13,6 +13,7 @@ dependencies = []
 [project.optional-dependencies]
 aws = [
   "boto3>=1.35,<2",
+  "pyTelegramBotAPI>=4.37,<5",
 ]
 rerun = [
   "numpy>=1.26,<3",
@@ -21,12 +22,22 @@ rerun = [
 dev = [
   "numpy>=1.26,<3",
   "pytest>=8,<9",
+  "pyTelegramBotAPI>=4.37,<5",
 ]
 
 [project.scripts]
 recon-aws-worker = "recon_pipeline.workers.aws.cli:main"
 recon-config = "recon_pipeline.workers.aws.config_cli:main"
-recon-rerun = "recon_pipeline.artifacts.rerun.cli:main"
+recon-rerun = "recon_pipeline.utilities.artefacts.rerun.export:main"
+recon-prepare-experiment = "recon_pipeline.utilities.datasets.fourdanyone.prepare_experiment:main"
+recon-4danyone = "recon_pipeline.utilities.datasets.fourdanyone.inference:main"
+recon-nerfstudio-export = "recon_pipeline.utilities.reconstructions.nerfstudio.export:main"
+recon-aws-preflight = "recon_pipeline.utilities.cloud.aws.preflight:main"
+recon-s3-download-input = "recon_pipeline.utilities.storage.s3.download_input:main"
+recon-s3-sync-models = "recon_pipeline.utilities.storage.s3.sync_models:main"
+recon-s3-restore-experiment = "recon_pipeline.utilities.storage.s3.restore_experiment:main"
+recon-s3-upload-results = "recon_pipeline.utilities.storage.s3.upload_results:main"
+recon-write-run-manifest = "recon_pipeline.utilities.artefacts.manifest.write:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

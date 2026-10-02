@@ -1,12 +1,11 @@
 import pytest
 
-from recon_pipeline.artifacts.rerun.exporter import select_camera_views
+from recon_pipeline.utilities.artefacts.rerun.exporter import select_camera_views
 
 
 def test_selects_evenly_spaced_views_from_first_layer() -> None:
     cameras = [
-        {"camera_id": index, "layer_index": 0, "yaw": index * 15}
-        for index in range(24)
+        {"camera_id": index, "layer_index": 0, "yaw": index * 15} for index in range(24)
     ]
     cameras += [
         {"camera_id": 24 + index, "layer_index": 1, "yaw": index * 15}

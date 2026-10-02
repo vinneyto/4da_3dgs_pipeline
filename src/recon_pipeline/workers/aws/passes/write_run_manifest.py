@@ -49,7 +49,7 @@ class WriteRunManifestPass:
             ]
         )
         result = run_utility(
-            "recon_pipeline.artifacts.manifest.utilities.write",
+            "recon_pipeline.utilities.artefacts.manifest.write",
             arguments,
             context,
             runner=self.runner,

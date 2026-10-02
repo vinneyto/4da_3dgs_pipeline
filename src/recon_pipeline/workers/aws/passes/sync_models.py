@@ -24,7 +24,7 @@ class S3SyncModelsPass:
 
     def run(self, context: PipelineContext) -> PassResult:
         result = run_utility(
-            "recon_pipeline.storage.s3.utilities.sync_models",
+            "recon_pipeline.utilities.storage.s3.sync_models",
             [
                 "--bucket",
                 self.worker.bucket_name,

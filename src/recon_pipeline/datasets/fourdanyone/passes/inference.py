@@ -60,7 +60,7 @@ class FourDAnyoneInferencePass:
 
     def run(self, context: PipelineContext) -> PassResult:
         result = run_utility(
-            "recon_pipeline.datasets.fourdanyone.utilities.inference",
+            "recon_pipeline.utilities.datasets.fourdanyone.inference",
             self.arguments(),
             context,
             runner=self.runner,

@@ -36,7 +36,7 @@ class RerunExportPass:
     def run(self, context: PipelineContext) -> PassResult:
         config = self.config
         result = run_utility(
-            "recon_pipeline.artifacts.rerun.utilities.export",
+            "recon_pipeline.utilities.artefacts.rerun.export",
             [
                 "--generation",
                 str(config.rerun_generation_dir),

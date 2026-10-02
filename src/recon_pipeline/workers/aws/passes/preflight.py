@@ -77,7 +77,7 @@ class AwsPreflightPass:
                 ]
             )
         health = run_utility(
-            "recon_pipeline.cloud.aws.utilities.preflight",
+            "recon_pipeline.utilities.cloud.aws.preflight",
             arguments,
             context,
             runner=self.runner,

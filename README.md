@@ -170,6 +170,11 @@ is no periodic resource polling or live log streaming.
 
 ## Debug one operation at a time
 
+All standalone utilities and their operation helpers live under
+`src/recon_pipeline/utilities/`, grouped into `artefacts`, `datasets`,
+`reconstructions`, `storage`, and `cloud`. Passes and worker code live outside
+this directory.
+
 Each utility is an independent Python program. It accepts only the parameters
 of its operation, emits progress and a final result on stdout, writes diagnostics
 to stderr, and returns a process exit code. It does not import worker or pipeline
@@ -178,24 +183,24 @@ sequencing, checkpoints and notifications.
 
 | Operation | Console command | Module under `recon_pipeline` |
 | --- | --- | --- |
-| Prepare workspace | `recon-prepare-experiment` | `datasets.fourdanyone.utilities.prepare_experiment` |
-| Generate dataset | `recon-4danyone` | `datasets.fourdanyone.utilities.inference` |
-| Export synchronized frames | `recon-nerfstudio-export` | `reconstructions.nerfstudio.utilities.export` |
-| Export recording | `recon-rerun` | `artifacts.rerun.utilities.export` |
-| Check resource access | `recon-aws-preflight` | `cloud.aws.utilities.preflight` |
-| Download video | `recon-s3-download-input` | `storage.s3.utilities.download_input` |
-| Sync model cache | `recon-s3-sync-models` | `storage.s3.utilities.sync_models` |
-| Restore source experiment | `recon-s3-restore-experiment` | `storage.s3.utilities.restore_experiment` |
-| Write manifest | `recon-write-run-manifest` | `artifacts.manifest.utilities.write` |
-| Upload results | `recon-s3-upload-results` | `storage.s3.utilities.upload_results` |
+| Prepare workspace | `recon-prepare-experiment` | `utilities.datasets.fourdanyone.prepare_experiment` |
+| Generate dataset | `recon-4danyone` | `utilities.datasets.fourdanyone.inference` |
+| Export synchronized frames | `recon-nerfstudio-export` | `utilities.reconstructions.nerfstudio.export` |
+| Export recording | `recon-rerun` | `utilities.artefacts.rerun.export` |
+| Check resource access | `recon-aws-preflight` | `utilities.cloud.aws.preflight` |
+| Download video | `recon-s3-download-input` | `utilities.storage.s3.download_input` |
+| Sync model cache | `recon-s3-sync-models` | `utilities.storage.s3.sync_models` |
+| Restore source experiment | `recon-s3-restore-experiment` | `utilities.storage.s3.restore_experiment` |
+| Write manifest | `recon-write-run-manifest` | `utilities.artefacts.manifest.write` |
+| Upload results | `recon-s3-upload-results` | `utilities.storage.s3.upload_results` |
 
 Each utility has its own file and can be run with a console command, `python -m`,
 or the Python debugger:
 
 ```bash
 recon-4danyone --help
-python -m recon_pipeline.datasets.fourdanyone.utilities.inference --help
-python -m pdb -m recon_pipeline.datasets.fourdanyone.utilities.inference --help
+python -m recon_pipeline.utilities.datasets.fourdanyone.inference --help
+python -m pdb -m recon_pipeline.utilities.datasets.fourdanyone.inference --help
 ```
 
 Run individual operations with explicit parameters:

@@ -12,9 +12,9 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from .config import AwsWorkerConfig, SageMakerAppConfig
-from recon_pipeline.storage.s3 import operations as storage
-from recon_pipeline.cloud.aws.sdk import boto3 as _boto3
-from recon_pipeline.cloud.aws.preflight import (
+from recon_pipeline.utilities.storage.s3 import operations as storage
+from recon_pipeline.utilities.cloud.aws.sdk import boto3 as _boto3
+from recon_pipeline.utilities.cloud.aws.access import (
     AwsHealthCheckResult,
     check_access,
     confirmed_email_subscription as _confirmed_email_subscription,

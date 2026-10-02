@@ -33,7 +33,7 @@ def test_aws_worker_is_a_separate_package() -> None:
     assert not (namespace / "core/worker.py").exists()
     assert (namespace / "reconstructions/nerfstudio/config.py").is_file()
     assert (namespace / "reconstructions/nerfstudio/passes/export.py").is_file()
-    assert (namespace / "artifacts/rerun/exporter.py").is_file()
+    assert (namespace / "utilities/artefacts/rerun/exporter.py").is_file()
     assert (namespace / "artifacts/rerun/passes/export.py").is_file()
     for package in (
         namespace / "datasets/fourdanyone",
@@ -92,7 +92,7 @@ def test_passes_only_launch_utilities_and_map_results() -> None:
 
 def test_operation_utilities_have_no_execution_config_dependencies() -> None:
     root = Path(__file__).parents[1] / "src/recon_pipeline"
-    sources = [root / "cli.py", *root.glob("**/utilities/*.py")]
+    sources = list((root / "utilities").rglob("*.py"))
     for path in sources:
         source = path.read_text()
         for forbidden in (

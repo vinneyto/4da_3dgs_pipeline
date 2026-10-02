@@ -29,16 +29,16 @@ from recon_pipeline.reconstructions.nerfstudio.passes import NerfstudioExportPas
 from recon_pipeline.workers.aws.passes import WriteRunManifestPass
 
 UTILITY_MODULES = [
-    "datasets.fourdanyone.utilities.prepare_experiment",
-    "datasets.fourdanyone.utilities.inference",
-    "reconstructions.nerfstudio.utilities.export",
-    "artifacts.rerun.utilities.export",
-    "cloud.aws.utilities.preflight",
-    "storage.s3.utilities.download_input",
-    "storage.s3.utilities.sync_models",
-    "storage.s3.utilities.restore_experiment",
-    "storage.s3.utilities.upload_results",
-    "artifacts.manifest.utilities.write",
+    "utilities.datasets.fourdanyone.prepare_experiment",
+    "utilities.datasets.fourdanyone.inference",
+    "utilities.reconstructions.nerfstudio.export",
+    "utilities.artefacts.rerun.export",
+    "utilities.cloud.aws.preflight",
+    "utilities.storage.s3.download_input",
+    "utilities.storage.s3.sync_models",
+    "utilities.storage.s3.restore_experiment",
+    "utilities.storage.s3.upload_results",
+    "utilities.artefacts.manifest.write",
 ]
 
 
@@ -67,6 +67,9 @@ def test_each_console_script_has_a_separate_utility_file():
     for target in targets:
         module = importlib.import_module(target.split(":")[0])
         assert Path(module.__file__).is_file()
+        assert Path(module.__file__).is_relative_to(
+            project / "src/recon_pipeline/utilities"
+        )
         assert callable(module.main)
 
 
@@ -193,7 +196,7 @@ def test_direct_inference_cli_works_with_relative_paths(tmp_path):
     command = [
         sys.executable,
         "-m",
-        "recon_pipeline.datasets.fourdanyone.utilities.inference",
+        "recon_pipeline.utilities.datasets.fourdanyone.inference",
         "--fourdanyone-root",
         "upstream",
         "--video",
@@ -235,7 +238,7 @@ def test_subprocess_bridge_rejects_missing_result(tmp_path):
 
 
 def test_rerun_utility_exports_and_reports_progress(monkeypatch, tmp_path, capsys):
-    from recon_pipeline.artifacts.rerun.utilities import export
+    from recon_pipeline.utilities.artefacts.rerun import export
 
     generation = tmp_path / "generation"
     generation.mkdir()
@@ -288,9 +291,9 @@ def test_aws_passes_forward_operation_arguments_and_read_stdout(monkeypatch, tmp
     from contextlib import redirect_stdout
     from dataclasses import asdict
     from io import StringIO
-    from recon_pipeline.cloud.aws.preflight import AwsHealthCheckResult
-    from recon_pipeline.cloud.aws.utilities import preflight
-    from recon_pipeline.storage.s3.utilities import (
+    from recon_pipeline.utilities.cloud.aws.access import AwsHealthCheckResult
+    from recon_pipeline.utilities.cloud.aws import preflight
+    from recon_pipeline.utilities.storage.s3 import (
         download_input,
         restore_experiment,
         sync_models,
@@ -432,7 +435,7 @@ def test_prepare_treats_settings_as_an_arbitrary_json_object(tmp_path):
         [
             sys.executable,
             "-m",
-            "recon_pipeline.datasets.fourdanyone.utilities.prepare_experiment",
+            "recon_pipeline.utilities.datasets.fourdanyone.prepare_experiment",
             "--directory",
             str(directory),
             "--settings",
@@ -476,7 +479,7 @@ def test_native_library_output_is_diagnostic_not_protocol(tmp_path):
         [
             sys.executable,
             "-m",
-            "recon_pipeline.datasets.fourdanyone.utilities.inference",
+            "recon_pipeline.utilities.datasets.fourdanyone.inference",
             *FourDAnyoneInferencePass(config).arguments(),
         ],
         capture_output=True,
@@ -522,7 +525,7 @@ def test_result_on_stderr_cannot_replace_the_stdout_result(tmp_path):
 
 def test_threaded_progress_and_library_diagnostics_use_separate_streams(capsys):
     import threading
-    from recon_pipeline.cli import report_progress, run_operation
+    from recon_pipeline.utilities._output import report_progress, run_operation
 
     def operation():
         print("ordinary library diagnostic")

@@ -51,7 +51,7 @@ class NerfstudioExportPass:
 
     def run(self, context: PipelineContext) -> PassResult:
         result = run_utility(
-            "recon_pipeline.reconstructions.nerfstudio.utilities.export",
+            "recon_pipeline.utilities.reconstructions.nerfstudio.export",
             self.arguments(),
             context,
             runner=self.runner,

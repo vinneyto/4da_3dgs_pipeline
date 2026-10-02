@@ -1,6 +1,6 @@
-"""Compatibility entry point for the standalone recording utility."""
+"""Compatibility entry point for recording export."""
 
-from .utilities.export import main
+from recon_pipeline.utilities.artefacts.rerun.export import main
 
 if __name__ == "__main__":
     main()

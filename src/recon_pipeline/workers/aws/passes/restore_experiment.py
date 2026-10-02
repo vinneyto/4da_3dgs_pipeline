@@ -31,7 +31,7 @@ class S3RestoreExperimentPass:
 
     def run(self, context: PipelineContext) -> PassResult:
         result = run_utility(
-            "recon_pipeline.storage.s3.utilities.restore_experiment",
+            "recon_pipeline.utilities.storage.s3.restore_experiment",
             [
                 "--bucket",
                 self.worker.bucket_name,

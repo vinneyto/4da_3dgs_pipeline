@@ -23,7 +23,7 @@ class PrepareExperimentPass:
 
     def run(self, context: PipelineContext) -> PassResult:
         result = run_utility(
-            "recon_pipeline.datasets.fourdanyone.utilities.prepare_experiment",
+            "recon_pipeline.utilities.datasets.fourdanyone.prepare_experiment",
             [
                 "--directory",
                 str(self.config.experiment_dir),

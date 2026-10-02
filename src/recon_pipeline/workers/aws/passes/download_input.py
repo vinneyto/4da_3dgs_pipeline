@@ -24,7 +24,7 @@ class S3DownloadInputPass:
 
     def run(self, context: PipelineContext) -> PassResult:
         result = run_utility(
-            "recon_pipeline.storage.s3.utilities.download_input",
+            "recon_pipeline.utilities.storage.s3.download_input",
             [
                 "--bucket",
                 self.worker.bucket_name,

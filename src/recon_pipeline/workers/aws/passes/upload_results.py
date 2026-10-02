@@ -27,7 +27,7 @@ class S3UploadResultsPass:
 
     def run(self, context: PipelineContext) -> PassResult:
         result = run_utility(
-            "recon_pipeline.storage.s3.utilities.upload_results",
+            "recon_pipeline.utilities.storage.s3.upload_results",
             [
                 "--bucket",
                 self.worker.bucket_name,

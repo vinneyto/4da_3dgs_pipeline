@@ -77,6 +77,11 @@ def test_passes_only_launch_utilities_and_map_results() -> None:
         if path.name == "__init__.py":
             continue
         source = path.read_text()
+        for node in ast.walk(ast.parse(source)):
+            if isinstance(node, ast.ImportFrom) and node.module == "aws":
+                assert {alias.name for alias in node.names} <= {
+                    "check_notification_channels"
+                }, f"{path} imports a worker operation instead of a utility"
         assert "run_utility(" in source, f"{path} must launch a standalone utility"
         for forbidden in (
             "import shutil",
@@ -85,7 +90,6 @@ def test_passes_only_launch_utilities_and_map_results() -> None:
             ".write_text(",
             ".unlink(",
             ".mkdir(",
-            "from ..aws import",
         ):
             assert forbidden not in source, f"{path} embeds an operation: {forbidden}"
 
@@ -105,6 +109,10 @@ def test_operation_utilities_have_no_execution_config_dependencies() -> None:
             "--worker-config",
             "--pipeline-config",
             "--result-file",
+            "telegram",
+            "telebot",
+            "notification",
+            "sns",
         ):
             assert (
                 forbidden not in source

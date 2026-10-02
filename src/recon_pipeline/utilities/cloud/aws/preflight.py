@@ -1,4 +1,4 @@
-"""Check access to explicitly selected AWS resources and notification channels."""
+"""Check access to explicitly selected AWS resources."""
 
 import argparse
 from dataclasses import asdict
@@ -25,10 +25,6 @@ def main(argv: Sequence[str] | None = None) -> None:
     )
     parser.add_argument("--models-prefix")
     parser.add_argument("--write-prefix")
-    parser.add_argument("--sns-topic-name")
-    parser.add_argument("--notification-email")
-    parser.add_argument("--telegram-chat-id")
-    parser.add_argument("--telegram-bot-token-env", default="TELEGRAM_BOT_TOKEN")
     parser.add_argument("--sagemaker-domain-id")
     parser.add_argument("--sagemaker-space-name")
     parser.add_argument("--sagemaker-app-name", default="default")

@@ -4,6 +4,7 @@ from recon_pipeline.core import PassResult, PipelineContext
 from recon_pipeline.core.command import CommandRunner
 from recon_pipeline.core.utility import run_utility
 from recon_pipeline.datasets.fourdanyone.config import FourDAnyoneConfig
+from ..aws import check_notification_channels
 from ..artifacts import AWS_HEALTH
 from ..config import AwsWorkerConfig
 
@@ -41,30 +42,6 @@ class AwsPreflightPass:
             arguments.extend(["--models-prefix", worker.models_prefix])
         if worker.upload_results:
             arguments.extend(["--write-prefix", worker.runs_prefix])
-        if worker.sns is not None and worker.sns.enabled:
-            arguments.extend(
-                [
-                    "--sns-topic-name",
-                    worker.sns.topic_name,
-                    "--notification-email",
-                    worker.sns.email,
-                ]
-            )
-        env = None
-        if worker.telegram is not None and worker.telegram.enabled:
-            token_env = (
-                worker.telegram.bot_token_env or "RECON_PREFLIGHT_TELEGRAM_TOKEN"
-            )
-            if worker.telegram.bot_token is not None:
-                env = {token_env: worker.telegram.bot_token}
-            arguments.extend(
-                [
-                    "--telegram-chat-id",
-                    worker.telegram.chat_id,
-                    "--telegram-bot-token-env",
-                    token_env,
-                ]
-            )
         if worker.shutdown_on != "never":
             arguments.extend(
                 [
@@ -81,8 +58,8 @@ class AwsPreflightPass:
             arguments,
             context,
             runner=self.runner,
-            env=env,
         )
+        health.update(check_notification_channels(worker))
         return PassResult(
             artifacts={AWS_HEALTH: health},
             details={

@@ -291,7 +291,7 @@ def test_aws_passes_forward_operation_arguments_and_read_stdout(monkeypatch, tmp
     from contextlib import redirect_stdout
     from dataclasses import asdict
     from io import StringIO
-    from recon_pipeline.utilities.cloud.aws.access import AwsHealthCheckResult
+    from recon_pipeline.utilities.cloud.aws.access import AwsAccessCheckResult
     from recon_pipeline.utilities.cloud.aws import preflight
     from recon_pipeline.utilities.storage.s3 import (
         download_input,
@@ -310,15 +310,11 @@ def test_aws_passes_forward_operation_arguments_and_read_stdout(monkeypatch, tmp
 
     worker = make_config(tmp_path)
     config = fake_upstream(tmp_path)
-    health = AwsHealthCheckResult(
+    health = AwsAccessCheckResult(
         "account",
         "caller",
         worker.bucket_name,
         (),
-        None,
-        None,
-        "disabled",
-        "disabled",
         None,
         worker.video_s3_uri,
         2,
@@ -329,11 +325,25 @@ def test_aws_passes_forward_operation_arguments_and_read_stdout(monkeypatch, tmp
         assert options["bucket"] == worker.bucket_name
         assert options["input_key"] == "input/leo.MOV"
         assert options["check_input"]
-        assert options["sns_topic_name"] == worker.sns.topic_name
+        assert not any(
+            key in options
+            for key in ("sns_topic_name", "notification_email", "telegram_chat_id")
+        )
         assert options["sagemaker_domain_id"] == worker.sagemaker.domain_id
         return health
 
     monkeypatch.setattr(preflight, "check_access", check)
+
+    channels = {
+        "topic_arn": None,
+        "subscription_arn": None,
+        "email_status": "disabled",
+        "telegram_status": "disabled",
+    }
+    monkeypatch.setattr(
+        "recon_pipeline.workers.aws.passes.preflight.check_notification_channels",
+        lambda worker: channels,
+    )
 
     def download(**options):
         assert options == {
@@ -393,7 +403,7 @@ def test_aws_passes_forward_operation_arguments_and_read_stdout(monkeypatch, tmp
     )
     result = AwsPreflightPass(worker, config, runner=runner).run(context)
     assert next(iter(result.artifacts.values())) == json.loads(
-        json.dumps(asdict(health))
+        json.dumps({**asdict(health), **channels})
     )
     worker.local_video_path.parent.mkdir(parents=True)
     worker.local_video_path.touch()
@@ -546,8 +556,12 @@ def test_threaded_progress_and_library_diagnostics_use_separate_streams(capsys):
     assert "ordinary library diagnostic" in captured.err
 
 
-def test_preflight_pass_transmits_inline_token_only_through_environment(tmp_path):
+@pytest.mark.parametrize("status", ["ready (chat 123)", "unavailable: denied"])
+def test_preflight_pass_checks_notifications_only_in_worker(
+    monkeypatch, tmp_path, status
+):
     from dataclasses import replace
+    from recon_pipeline.workers.aws.artifacts import AWS_HEALTH
     from recon_pipeline.workers.aws.config import TelegramConfig
     from recon_pipeline.workers.aws.passes import AwsPreflightPass
     from test_aws_health import make_config
@@ -557,23 +571,58 @@ def test_preflight_pass_transmits_inline_token_only_through_environment(tmp_path
         telegram=TelegramConfig(chat_id="123", bot_token="fixture-secret"),
     )
     config = fake_upstream(tmp_path)
+    observed = []
 
     class Runner:
-        def run(self, command, *, env, on_line, **options):
+        def run(self, command, *, on_line, **options):
             assert "fixture-secret" not in command
-            assert env == {"RECON_PREFLIGHT_TELEGRAM_TOKEN": "fixture-secret"}
+            assert not any(
+                "telegram" in arg or "notification" in arg or "sns" in arg
+                for arg in command
+            )
+            assert "env" not in options
+            observed.append("utility")
             on_line(
                 json.dumps(
                     {
                         "event": "result",
-                        "data": {
-                            "caller_arn": "caller",
-                            "bucket": "bucket",
-                            "email_status": "disabled",
-                            "telegram_status": "ready",
-                        },
+                        "data": {"caller_arn": "caller", "bucket": "bucket"},
                     }
                 )
             )
 
-    AwsPreflightPass(worker, config, runner=Runner()).run(PipelineContext())
+    def check_channels(config):
+        assert config is worker
+        assert observed == ["utility"]
+        observed.append("channels")
+        return {"email_status": "disabled", "telegram_status": status}
+
+    monkeypatch.setattr(
+        "recon_pipeline.workers.aws.passes.preflight.check_notification_channels",
+        check_channels,
+    )
+    result = AwsPreflightPass(worker, config, runner=Runner()).run(PipelineContext())
+    assert result.details["telegram"] == status
+    assert result.artifacts[AWS_HEALTH]["telegram_status"] == status
+    assert observed == ["utility", "channels"]
+
+
+def test_preflight_failure_does_not_run_worker_channel_checks(monkeypatch, tmp_path):
+    from recon_pipeline.workers.aws.passes import AwsPreflightPass
+    from test_aws_health import make_config
+
+    def check_channels(config):
+        pytest.fail("Channel checks must follow a successful utility result")
+
+    class Runner:
+        def run(self, command, **options):
+            raise RuntimeError("AWS access denied")
+
+    monkeypatch.setattr(
+        "recon_pipeline.workers.aws.passes.preflight.check_notification_channels",
+        check_channels,
+    )
+    with pytest.raises(RuntimeError, match="AWS access denied"):
+        AwsPreflightPass(
+            make_config(tmp_path), fake_upstream(tmp_path), runner=Runner()
+        ).run(PipelineContext())

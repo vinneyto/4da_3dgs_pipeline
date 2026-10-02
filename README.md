@@ -321,13 +321,15 @@ For a manifest with frame datasets and timings, pass `--datasets` with a JSON
 list of `frame`/`dataset_dir` objects and `--durations` with a JSON object mapping
 operation names to seconds. Both default to empty collections.
 
-The access-check utility can also inspect explicitly selected resources using
-`--sns-topic-name`/`--notification-email`,
-`--telegram-chat-id`/`--telegram-bot-token-env`, and
+The access-check utility can inspect SageMaker resources using
 `--sagemaker-domain-id`/`--sagemaker-space-name`/`--sagemaker-app-name`.
-It checks channel access without sending notifications or shutting down an app.
-AWS credentials use the standard boto3 environment/role chain; Telegram tokens
-are read from the named environment variable.
+AWS credentials use the standard boto3 environment/role chain.
+Utilities do not check or send notifications and accept no notification settings
+or tokens. The preflight pass checks optional SNS email and Telegram channels
+in the worker process after the AWS utility succeeds. Worker observers send
+notifications based on pass lifecycle events and progress parsed from stdout.
+Telegram access uses the synchronous `pyTelegramBotAPI` client, included in the
+`aws` extra; tokens are resolved only inside the worker.
 
 ## Validate and inspect
 

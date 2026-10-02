@@ -30,12 +30,12 @@ recon-rerun = "recon_pipeline.artifacts.rerun.utilities.export:main"
 recon-prepare-experiment = "recon_pipeline.datasets.fourdanyone.utilities.prepare_experiment:main"
 recon-4danyone = "recon_pipeline.datasets.fourdanyone.utilities.inference:main"
 recon-nerfstudio-export = "recon_pipeline.reconstructions.nerfstudio.utilities.export:main"
-recon-aws-preflight = "recon_pipeline.workers.aws.utilities.preflight:main"
-recon-s3-download-input = "recon_pipeline.workers.aws.utilities.download_input:main"
-recon-s3-sync-models = "recon_pipeline.workers.aws.utilities.sync_models:main"
-recon-s3-restore-experiment = "recon_pipeline.workers.aws.utilities.restore_experiment:main"
-recon-s3-upload-results = "recon_pipeline.workers.aws.utilities.upload_results:main"
-recon-write-run-manifest = "recon_pipeline.workers.aws.utilities.write_run_manifest:main"
+recon-aws-preflight = "recon_pipeline.cloud.aws.utilities.preflight:main"
+recon-s3-download-input = "recon_pipeline.storage.s3.utilities.download_input:main"
+recon-s3-sync-models = "recon_pipeline.storage.s3.utilities.sync_models:main"
+recon-s3-restore-experiment = "recon_pipeline.storage.s3.utilities.restore_experiment:main"
+recon-s3-upload-results = "recon_pipeline.storage.s3.utilities.upload_results:main"
+recon-write-run-manifest = "recon_pipeline.artifacts.manifest.utilities.write:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

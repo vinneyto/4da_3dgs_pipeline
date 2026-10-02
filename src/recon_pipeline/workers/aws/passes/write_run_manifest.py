@@ -1,5 +1,7 @@
 """Launch the standalone run manifest writer."""
 
+import json
+
 from recon_pipeline.core import PassResult, PipelineContext
 from recon_pipeline.core.command import CommandRunner
 from recon_pipeline.core.utility import run_utility
@@ -28,16 +30,29 @@ class WriteRunManifestPass:
             if RERUN_RECORDING in context.artifacts
             else []
         )
+        arguments.extend(
+            [
+                "--output",
+                str(self.config.experiment_dir / "pipeline-result.json"),
+                "--experiment-name",
+                self.config.experiment_name,
+                "--experiment-dir",
+                str(self.config.experiment_dir),
+                "--inference-dir",
+                str(self.config.inference_dir),
+                "--num-views",
+                str(self.config.num_views),
+                "--datasets",
+                json.dumps(context.artifacts.get(NERFSTUDIO_DATASETS, [])),
+                "--durations",
+                json.dumps(dict(context.values.get("pass_durations", {}))),
+            ]
+        )
         result = run_utility(
-            "recon_pipeline.workers.aws.utilities.write_run_manifest",
+            "recon_pipeline.artifacts.manifest.utilities.write",
             arguments,
             context,
             runner=self.runner,
-            documents={
-                "--pipeline-config": self.config.to_dict(),
-                "--datasets": context.artifacts.get(NERFSTUDIO_DATASETS, []),
-                "--durations": dict(context.values.get("pass_durations", {})),
-            },
         )
         return PassResult(
             artifacts={RUN_RESULT: result["manifest"]}, details={"path": result["path"]}

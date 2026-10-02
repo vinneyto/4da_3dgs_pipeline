@@ -88,3 +88,24 @@ def test_passes_only_launch_utilities_and_map_results() -> None:
             "from ..aws import",
         ):
             assert forbidden not in source, f"{path} embeds an operation: {forbidden}"
+
+
+def test_operation_utilities_have_no_execution_config_dependencies() -> None:
+    root = Path(__file__).parents[1] / "src/recon_pipeline"
+    sources = [root / "cli.py", *root.glob("**/utilities/*.py")]
+    for path in sources:
+        source = path.read_text()
+        for forbidden in (
+            "AwsWorkerConfig",
+            "FourDAnyoneConfig",
+            "PipelineContext",
+            "PassResult",
+            "recon_pipeline.core",
+            "recon_pipeline.workers",
+            "--worker-config",
+            "--pipeline-config",
+            "--result-file",
+        ):
+            assert (
+                forbidden not in source
+            ), f"{path} depends on orchestration: {forbidden}"

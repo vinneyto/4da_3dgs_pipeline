@@ -24,10 +24,19 @@ class S3DownloadInputPass:
 
     def run(self, context: PipelineContext) -> PassResult:
         result = run_utility(
-            "recon_pipeline.workers.aws.utilities.download_input",
-            ["--replace-existing"],
+            "recon_pipeline.storage.s3.utilities.download_input",
+            [
+                "--bucket",
+                self.worker.bucket_name,
+                "--key",
+                self.worker.bucket.video_key,
+                "--output",
+                str(self.worker.local_video_path),
+                "--region",
+                self.worker.region,
+                "--replace-existing",
+            ],
             context,
             runner=self.runner,
-            documents={"--worker-config": self.worker.to_dict()},
         )
         return PassResult(artifacts={INPUT_VIDEO: Path(result["path"])}, details=result)

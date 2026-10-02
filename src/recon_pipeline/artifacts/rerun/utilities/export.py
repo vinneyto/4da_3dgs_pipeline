@@ -4,11 +4,7 @@ import argparse
 from pathlib import Path
 from typing import Sequence
 
-from recon_pipeline.core.utility import (
-    add_result_argument,
-    report_progress,
-    write_result,
-)
+from recon_pipeline.cli import report_progress, run_operation
 from ..exporter import RerunExporter
 
 
@@ -20,10 +16,13 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--view-count", type=int, default=4)
     parser.add_argument("--device", default="auto")
     parser.add_argument("--replace-existing", action="store_true")
-    add_result_argument(parser)
     args = parser.parse_args(argv)
+    run_operation(lambda: export_recording(args))
+
+
+def export_recording(args: argparse.Namespace) -> dict:
     if args.view_count < 1:
-        parser.error("view count must be positive")
+        raise ValueError("view count must be positive")
     for path in (args.generation / "metadata.json", args.generation / "cameras.json"):
         if not path.is_file():
             raise FileNotFoundError(f"Missing required path: {path}")
@@ -48,7 +47,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         raise RuntimeError(
             f"Rerun export completed without expected recording: {output}"
         )
-    write_result({"path": str(output)}, args.result_file)
+    return {"path": str(output)}
 
 
 if __name__ == "__main__":

@@ -5,22 +5,20 @@ from __future__ import annotations
 import json
 import mimetypes
 import uuid
-from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any, Sequence
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from .config import AwsWorkerConfig, SageMakerAppConfig
-
-
-def _boto3():
-    try:
-        import boto3
-    except ImportError as error:
-        raise RuntimeError("AWS support requires: pip install 'recon-pipeline[aws]'") from error
-    return boto3
+from recon_pipeline.storage.s3 import operations as storage
+from recon_pipeline.cloud.aws.sdk import boto3 as _boto3
+from recon_pipeline.cloud.aws.preflight import (
+    AwsHealthCheckResult,
+    check_access,
+    confirmed_email_subscription as _confirmed_email_subscription,
+)
 
 
 def configure_email(config: AwsWorkerConfig) -> dict[str, str]:
@@ -51,9 +49,11 @@ def configure_email(config: AwsWorkerConfig) -> dict[str, str]:
 def topic_arn(config: AwsWorkerConfig) -> str:
     if config.sns is None:
         raise ValueError("email notifications are not configured")
-    return _boto3().client("sns", region_name=config.region).create_topic(
-        Name=config.sns.topic_name
-    )["TopicArn"]
+    return (
+        _boto3()
+        .client("sns", region_name=config.region)
+        .create_topic(Name=config.sns.topic_name)["TopicArn"]
+    )
 
 
 def _telegram_request(
@@ -273,7 +273,9 @@ def get_telegram_updates(
     return list(result or [])
 
 
-def publish_notification(config: AwsWorkerConfig, subject: str, message: str) -> dict[str, str]:
+def publish_notification(
+    config: AwsWorkerConfig, subject: str, message: str
+) -> dict[str, str]:
     """Publish to every enabled channel without making notifications job-critical."""
     outcomes: dict[str, str] = {}
     if config.sns is not None and config.sns.enabled:
@@ -287,237 +289,76 @@ def publish_notification(config: AwsWorkerConfig, subject: str, message: str) ->
     return outcomes
 
 
-def publish_completion(config: AwsWorkerConfig, subject: str, message: str) -> dict[str, str]:
+def publish_completion(
+    config: AwsWorkerConfig, subject: str, message: str
+) -> dict[str, str]:
     """Backward-compatible name for completion/failure notifications."""
     return publish_notification(config, subject, message)
 
 
-@dataclass(frozen=True, slots=True)
-class AwsHealthCheckResult:
-    account: str
-    caller_arn: str
-    bucket: str
-    writable_prefixes: tuple[str, ...]
-    topic_arn: str | None
-    subscription_arn: str | None
-    email_status: str
-    telegram_status: str
-    sagemaker_app_status: str | None
-    video_s3_uri: str
-    model_object_count: int
-
-
-def _confirmed_email_subscription(sns: Any, arn: str, email: str) -> str:
-    next_token: str | None = None
-    observed_state: str | None = None
-    while True:
-        arguments = {"TopicArn": arn}
-        if next_token:
-            arguments["NextToken"] = next_token
-        response = sns.list_subscriptions_by_topic(**arguments)
-        for subscription in response.get("Subscriptions", []):
-            if (
-                subscription.get("Protocol") == "email"
-                and subscription.get("Endpoint", "").casefold() == email.casefold()
-            ):
-                subscription_arn = subscription.get("SubscriptionArn", "")
-                if subscription_arn.startswith("arn:"):
-                    return subscription_arn
-                observed_state = subscription_arn or "unknown"
-        next_token = response.get("NextToken")
-        if not next_token:
-            break
-
-    state = observed_state or "missing"
-    raise RuntimeError(
-        f"SNS email subscription for {email} is {state}. Run "
-        "'recon-aws-worker configure-email --config <path>' and confirm the email "
-        "before starting the worker."
-    )
-
-
-def _probe_s3_prefix(s3: Any, config: AwsWorkerConfig, prefix: str, job_id: str) -> str:
-    key = "/".join(
-        part for part in (prefix.strip("/"), ".worker-health", f"{job_id}.json") if part
-    )
-    body = json.dumps({"job_id": job_id, "purpose": "recon-aws-worker health check"})
-    s3.put_object(
-        Bucket=config.bucket_name,
-        Key=key,
-        Body=body.encode("utf-8"),
-        ContentType="application/json",
-    )
-    # Delete is not required by the worker itself. Clean up when the execution
-    # role allows it, but do not turn an optional permission into a prerequisite.
-    try:
-        s3.delete_object(Bucket=config.bucket_name, Key=key)
-    except Exception:
-        pass
-    return prefix
-
-
 def run_health_check(
-    config: AwsWorkerConfig,
-    job_id: str,
-    *,
-    require_input_video: bool = True,
+    config: AwsWorkerConfig, job_id: str, *, require_input_video: bool = True
 ) -> AwsHealthCheckResult:
-    """Validate every AWS dependency before expensive pipeline work begins."""
-    boto3 = _boto3()
-
-    identity = boto3.client("sts", region_name=config.region).get_caller_identity()
-
-    s3 = boto3.client("s3", region_name=config.region)
-    s3.head_bucket(Bucket=config.bucket_name)
-    video_bucket, video_key = config.video_s3_location
-    if require_input_video:
-        s3.head_object(Bucket=video_bucket, Key=video_key)
-
-    model_object_count = 0
-    if config.sync_models:
-        response = s3.list_objects_v2(
-            Bucket=config.bucket_name,
-            Prefix=f"{config.models_prefix}/" if config.models_prefix else "",
-            MaxKeys=1,
-        )
-        model_object_count = int(response.get("KeyCount", 0))
-
-    prefixes: list[str] = []
-    if config.upload_results:
-        prefixes.append(_probe_s3_prefix(s3, config, config.runs_prefix, job_id))
-
-    arn: str | None = None
-    subscription_arn: str | None = None
-    email_status = "disabled"
-    if config.sns is not None and config.sns.enabled:
-        try:
-            sns = boto3.client("sns", region_name=config.region)
-            arn = sns.create_topic(Name=config.sns.topic_name)["TopicArn"]
-            subscription_arn = _confirmed_email_subscription(sns, arn, config.sns.email)
-            email_status = "ready"
-        except Exception as error:
-            email_status = f"unavailable: {error}"
-
-    telegram_status = "disabled"
-    if config.telegram is not None and config.telegram.enabled:
-        try:
-            chat_id = _check_telegram(config)
-            telegram_status = f"ready (chat {chat_id})"
-        except Exception as error:
-            telegram_status = f"unavailable: {error}"
-
-    app_status: str | None = None
-    if config.shutdown_on != "never":
-        app = boto3.client("sagemaker", region_name=config.region).describe_app(
-            DomainId=config.sagemaker.domain_id,
-            SpaceName=config.sagemaker.space_name,
-            AppType="JupyterLab",
-            AppName=config.sagemaker.app_name,
-        )
-        app_status = app["Status"]
-        if app_status != "InService":
-            raise RuntimeError(
-                f"SageMaker JupyterLab App must be InService, got {app_status!r}"
-            )
-
-    result = AwsHealthCheckResult(
-        account=identity["Account"],
-        caller_arn=identity["Arn"],
-        bucket=config.bucket_name,
-        writable_prefixes=tuple(prefixes),
-        topic_arn=arn,
-        subscription_arn=subscription_arn,
-        email_status=email_status,
-        telegram_status=telegram_status,
-        sagemaker_app_status=app_status,
-        video_s3_uri=config.video_s3_uri,
-        model_object_count=model_object_count,
+    email = config.sns if config.sns is not None and config.sns.enabled else None
+    telegram = (
+        config.telegram
+        if config.telegram is not None and config.telegram.enabled
+        else None
     )
-    return result
+    app = config.sagemaker if config.shutdown_on != "never" else None
+    return check_access(
+        region=config.region,
+        bucket=config.bucket_name,
+        input_key=config.bucket.video_key,
+        check_input=require_input_video,
+        models_prefix=config.models_prefix if config.sync_models else None,
+        write_prefix=config.runs_prefix if config.upload_results else None,
+        sns_topic_name=email.topic_name if email else None,
+        notification_email=email.email if email else None,
+        telegram_chat_id=telegram.chat_id if telegram else None,
+        telegram_check=(lambda: _check_telegram(config)) if telegram else None,
+        sagemaker_domain_id=app.domain_id if app else None,
+        sagemaker_space_name=app.space_name if app else None,
+        sagemaker_app_name=app.app_name if app else "default",
+        sdk=_boto3(),
+    )
 
 
 def download_input_video(config: AwsWorkerConfig) -> Path:
-    client = _boto3().client("s3", region_name=config.region)
     bucket, key = config.video_s3_location
-    metadata = client.head_object(Bucket=bucket, Key=key)
-    destination = config.local_video_path
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    if destination.is_file() and destination.stat().st_size == metadata["ContentLength"]:
-        return destination
-    temporary = destination.with_suffix(destination.suffix + ".download")
-    client.download_file(bucket, key, str(temporary))
-    temporary.replace(destination)
-    return destination
+    return storage.download_file(
+        bucket=bucket,
+        key=key,
+        destination=config.local_video_path,
+        region=config.region,
+        client=_boto3().client("s3", region_name=config.region),
+    )
 
 
 def sync_model_objects(config: AwsWorkerConfig) -> tuple[int, int]:
-    """Download changed S3 model objects, preserving the persistent EBS cache."""
     if not config.sync_models:
         return 0, 0
-    client = _boto3().client("s3", region_name=config.region)
-    prefix = f"{config.models_prefix}/" if config.models_prefix else ""
-    paginator = client.get_paginator("list_objects_v2")
-    found = 0
-    downloaded = 0
-    config.local.model_dir.mkdir(parents=True, exist_ok=True)
-    for page in paginator.paginate(Bucket=config.bucket_name, Prefix=prefix):
-        for item in page.get("Contents", []):
-            key = item["Key"]
-            relative = key[len(prefix) :]
-            if not relative or relative.endswith("/"):
-                continue
-            relative_path = PurePosixPath(relative)
-            if relative_path.is_absolute() or ".." in relative_path.parts:
-                raise ValueError(f"unsafe model object key: {key}")
-            found += 1
-            destination = config.local.model_dir.joinpath(*relative_path.parts)
-            if destination.is_file() and destination.stat().st_size == item["Size"]:
-                continue
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            temporary = destination.with_suffix(destination.suffix + ".download")
-            client.download_file(config.bucket_name, key, str(temporary))
-            temporary.replace(destination)
-            downloaded += 1
-    return found, downloaded
+    return storage.sync_prefix(
+        bucket=config.bucket_name,
+        prefix=config.models_prefix,
+        destination=config.local.model_dir,
+        region=config.region,
+        client=_boto3().client("s3", region_name=config.region),
+    )
 
 
 def sync_experiment_results(
-    config: AwsWorkerConfig,
-    experiment_name: str,
-    destination: Path,
+    config: AwsWorkerConfig, experiment_name: str, destination: Path
 ) -> tuple[int, int]:
-    """Restore one prior experiment from S3 for artifact-only jobs."""
-    client = _boto3().client("s3", region_name=config.region)
-    prefix = "/".join(
-        part for part in (config.runs_prefix, experiment_name) if part
-    ).rstrip("/") + "/"
-    paginator = client.get_paginator("list_objects_v2")
-    found = 0
-    downloaded = 0
-    destination.mkdir(parents=True, exist_ok=True)
-    for page in paginator.paginate(Bucket=config.bucket_name, Prefix=prefix):
-        for item in page.get("Contents", []):
-            key = item["Key"]
-            relative = key[len(prefix) :]
-            if not relative or relative.endswith("/"):
-                continue
-            relative_path = PurePosixPath(relative)
-            if relative_path.is_absolute() or ".." in relative_path.parts:
-                raise ValueError(f"unsafe experiment object key: {key}")
-            found += 1
-            target = destination.joinpath(*relative_path.parts)
-            if target.is_file() and target.stat().st_size == item["Size"]:
-                continue
-            target.parent.mkdir(parents=True, exist_ok=True)
-            temporary = target.with_suffix(target.suffix + ".download")
-            client.download_file(config.bucket_name, key, str(temporary))
-            temporary.replace(target)
-            downloaded += 1
-    if found == 0:
-        raise FileNotFoundError(
-            f"No source experiment objects found at s3://{config.bucket_name}/{prefix}"
-        )
-    return found, downloaded
+    prefix = "/".join(part for part in (config.runs_prefix, experiment_name) if part)
+    return storage.sync_prefix(
+        bucket=config.bucket_name,
+        prefix=prefix,
+        destination=destination,
+        region=config.region,
+        require_objects=True,
+        client=_boto3().client("s3", region_name=config.region),
+    )
 
 
 def experiment_s3_uri(config: AwsWorkerConfig, experiment_name: str) -> str:
@@ -525,38 +366,27 @@ def experiment_s3_uri(config: AwsWorkerConfig, experiment_name: str) -> str:
     return f"s3://{config.bucket_name}/{key}/"
 
 
-def delete_experiment_results(
-    config: AwsWorkerConfig, experiment_name: str
-) -> int:
-    """Delete objects owned by one experiment result prefix."""
-    client = _boto3().client("s3", region_name=config.region)
-    prefix = "/".join(
-        part for part in (config.runs_prefix, experiment_name) if part
-    ).rstrip("/") + "/"
-    paginator = client.get_paginator("list_objects_v2")
-    deleted = 0
-    for page in paginator.paginate(Bucket=config.bucket_name, Prefix=prefix):
-        objects = [{"Key": item["Key"]} for item in page.get("Contents", [])]
-        for offset in range(0, len(objects), 1000):
-            batch = objects[offset : offset + 1000]
-            if not batch:
-                continue
-            client.delete_objects(
-                Bucket=config.bucket_name,
-                Delete={"Objects": batch, "Quiet": True},
-            )
-            deleted += len(batch)
-    return deleted
-
-
-def upload_directory(config: AwsWorkerConfig, source: Path, experiment_name: str) -> str:
-    client = _boto3().client("s3", region_name=config.region)
+def delete_experiment_results(config: AwsWorkerConfig, experiment_name: str) -> int:
     prefix = "/".join(part for part in (config.runs_prefix, experiment_name) if part)
-    for path in source.rglob("*"):
-        if path.is_file():
-            key = f"{prefix}/{path.relative_to(source).as_posix()}"
-            client.upload_file(str(path), config.bucket_name, key)
-    return experiment_s3_uri(config, experiment_name)
+    return storage.delete_prefix(
+        bucket=config.bucket_name,
+        prefix=prefix,
+        region=config.region,
+        client=_boto3().client("s3", region_name=config.region),
+    )
+
+
+def upload_directory(
+    config: AwsWorkerConfig, source: Path, experiment_name: str
+) -> str:
+    prefix = "/".join(part for part in (config.runs_prefix, experiment_name) if part)
+    return storage.upload_directory(
+        bucket=config.bucket_name,
+        prefix=prefix,
+        source=source,
+        region=config.region,
+        client=_boto3().client("s3", region_name=config.region),
+    )
 
 
 def stop_sagemaker_app(region: str, app: SageMakerAppConfig) -> None:

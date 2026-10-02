@@ -11,11 +11,7 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
-from recon_pipeline.core.utility import (
-    add_result_argument,
-    report_progress,
-    write_result,
-)
+from recon_pipeline.cli import report_progress, run_operation
 
 
 class JsonProgressHandler(logging.Handler):
@@ -41,15 +37,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--turbo", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--attention-backend", default="auto")
     parser.add_argument("--replace-existing", action="store_true")
-    add_result_argument(parser)
     return parser
 
 
-def main(argv: Sequence[str] | None = None) -> None:
-    parser = build_parser()
-    args = parser.parse_args(argv)
-    if args.result_file is not None:
-        args.result_file = args.result_file.resolve()
+def generate(args: argparse.Namespace) -> dict:
     root, video, output, models = (
         path.expanduser().resolve()
         for path in (args.fourdanyone_root, args.video, args.output, args.model_dir)
@@ -69,11 +60,11 @@ def main(argv: Sequence[str] | None = None) -> None:
         or not args.layer_pitches
         or args.views_per_layer * len(args.layer_pitches) % 6
     ):
-        parser.error("total target views must be positive and divisible by 6")
+        raise ValueError("total target views must be positive and divisible by 6")
     if any(p < -15 or p > 45 for p in args.layer_pitches):
-        parser.error("layer pitches must be between -15 and 45")
+        raise ValueError("layer pitches must be between -15 and 45")
     if not 1 <= args.yaw_span <= 360 or args.target_fps <= 0:
-        parser.error(
+        raise ValueError(
             "yaw span must be between 1 and 360 and target FPS must be positive"
         )
     if output.exists():
@@ -112,7 +103,12 @@ def main(argv: Sequence[str] | None = None) -> None:
     inference(**request)
     if not (output / "metadata.json").is_file():
         raise RuntimeError(f"4DAnyone completed without expected metadata: {output}")
-    write_result({"path": str(output)}, args.result_file)
+    return {"path": str(output)}
+
+
+def main(argv: Sequence[str] | None = None) -> None:
+    args = build_parser().parse_args(argv)
+    run_operation(lambda: generate(args))
 
 
 if __name__ == "__main__":

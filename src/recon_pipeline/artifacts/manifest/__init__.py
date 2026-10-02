@@ -1,0 +1,1 @@
+"""Standalone operation helpers."""

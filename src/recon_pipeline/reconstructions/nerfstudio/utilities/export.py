@@ -3,15 +3,11 @@
 import argparse
 import shutil
 import sys
+import subprocess
 from pathlib import Path
 from typing import Sequence
 
-from recon_pipeline.core.command import CommandRunner
-from recon_pipeline.core.utility import (
-    add_result_argument,
-    report_progress,
-    write_result,
-)
+from recon_pipeline.cli import report_progress, run_operation
 
 
 def export_frames(
@@ -23,7 +19,6 @@ def export_frames(
     frames: Sequence[int],
     device: str,
     replace_existing: bool,
-    runner: CommandRunner | None = None,
 ) -> dict:
     for path in (
         root / "scripts/export_nerfstudio.py",
@@ -47,7 +42,7 @@ def export_frames(
                 shutil.rmtree(path)
     datasets = []
     for offset, (frame, destination) in enumerate(zip(frames, destinations)):
-        (runner or CommandRunner()).run(
+        subprocess.run(
             [
                 sys.executable,
                 str(root / "scripts/export_nerfstudio.py"),
@@ -63,6 +58,9 @@ def export_frames(
                 device,
             ],
             cwd=root,
+            stdout=sys.stderr,
+            stderr=sys.stderr,
+            check=True,
         )
         if not (destination / "transforms.json").is_file():
             raise RuntimeError(
@@ -82,18 +80,18 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--frames", type=int, nargs="+", default=[60])
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--replace-existing", action="store_true")
-    add_result_argument(parser)
     args = parser.parse_args(argv)
-    result = export_frames(
-        root=args.fourdanyone_root.expanduser().resolve(),
-        generation=args.generation.expanduser().resolve(),
-        output=args.output.expanduser().resolve(),
-        model_dir=args.model_dir.expanduser().resolve(),
-        frames=args.frames,
-        device=args.device,
-        replace_existing=args.replace_existing,
+    run_operation(
+        lambda: export_frames(
+            root=args.fourdanyone_root.expanduser().resolve(),
+            generation=args.generation.expanduser().resolve(),
+            output=args.output.expanduser().resolve(),
+            model_dir=args.model_dir.expanduser().resolve(),
+            frames=args.frames,
+            device=args.device,
+            replace_existing=args.replace_existing,
+        )
     )
-    write_result(result, args.result_file)
 
 
 if __name__ == "__main__":

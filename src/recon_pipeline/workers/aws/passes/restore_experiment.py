@@ -31,17 +31,24 @@ class S3RestoreExperimentPass:
 
     def run(self, context: PipelineContext) -> PassResult:
         result = run_utility(
-            "recon_pipeline.workers.aws.utilities.restore_experiment",
+            "recon_pipeline.storage.s3.utilities.restore_experiment",
             [
-                "--experiment",
-                self.experiment_name,
+                "--bucket",
+                self.worker.bucket_name,
+                "--region",
+                self.worker.region,
+                "--prefix",
+                "/".join(
+                    part
+                    for part in (self.worker.runs_prefix, self.experiment_name)
+                    if part
+                ),
                 "--destination",
                 str(self.destination),
                 "--replace-existing",
             ],
             context,
             runner=self.runner,
-            documents={"--worker-config": self.worker.to_dict()},
         )
         return PassResult(
             artifacts={experiment_artifact(self.experiment_name): Path(result["path"])},

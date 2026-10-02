@@ -24,11 +24,20 @@ class S3SyncModelsPass:
 
     def run(self, context: PipelineContext) -> PassResult:
         result = run_utility(
-            "recon_pipeline.workers.aws.utilities.sync_models",
-            [],
+            "recon_pipeline.storage.s3.utilities.sync_models",
+            [
+                "--bucket",
+                self.worker.bucket_name,
+                "--prefix",
+                self.worker.models_prefix,
+                "--destination",
+                str(self.worker.local.model_dir),
+                "--region",
+                self.worker.region,
+                "--sync" if self.worker.sync_models else "--no-sync",
+            ],
             context,
             runner=self.runner,
-            documents={"--worker-config": self.worker.to_dict()},
         )
         return PassResult(
             artifacts={MODEL_CACHE: Path(result["path"])},

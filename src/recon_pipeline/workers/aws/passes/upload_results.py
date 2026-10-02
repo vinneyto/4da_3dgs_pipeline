@@ -27,16 +27,23 @@ class S3UploadResultsPass:
 
     def run(self, context: PipelineContext) -> PassResult:
         result = run_utility(
-            "recon_pipeline.workers.aws.utilities.upload_results",
+            "recon_pipeline.storage.s3.utilities.upload_results",
             [
-                "--experiment",
-                self.config.experiment_name,
+                "--bucket",
+                self.worker.bucket_name,
+                "--region",
+                self.worker.region,
+                "--prefix",
+                "/".join(
+                    part
+                    for part in (self.worker.runs_prefix, self.config.experiment_name)
+                    if part
+                ),
                 "--source",
                 str(self.config.experiment_dir),
                 "--replace-existing",
             ],
             context,
             runner=self.runner,
-            documents={"--worker-config": self.worker.to_dict()},
         )
         return PassResult(artifacts={S3_RESULT: result["s3_uri"]}, details=result)

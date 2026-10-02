@@ -1,5 +1,7 @@
 """Launch the standalone workspace preparation utility."""
 
+import json
+
 from recon_pipeline.core import PassResult, PipelineContext
 from recon_pipeline.core.command import CommandRunner
 from recon_pipeline.core.utility import run_utility
@@ -22,11 +24,18 @@ class PrepareExperimentPass:
     def run(self, context: PipelineContext) -> PassResult:
         result = run_utility(
             "recon_pipeline.datasets.fourdanyone.utilities.prepare_experiment",
-            [],
+            [
+                "--directory",
+                str(self.config.experiment_dir),
+                "--settings-output",
+                str(self.config.experiment_dir / "pipeline-config.json"),
+                "--settings",
+                json.dumps(self.config.to_dict()),
+            ],
             context,
             runner=self.runner,
-            documents={"--pipeline-config": self.config.to_dict()},
         )
         return PassResult(
-            artifacts={EXPERIMENT_WORKSPACE: self.config.experiment_dir}, details=result
+            artifacts={EXPERIMENT_WORKSPACE: self.config.experiment_dir},
+            details={"path": result["path"]},
         )

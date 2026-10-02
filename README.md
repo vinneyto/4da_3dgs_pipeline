@@ -170,11 +170,11 @@ is no periodic resource polling or live log streaming.
 
 ## Debug one operation at a time
 
-Every pass launches one Python utility in a separate process. Each utility has
-its own file under the owning package's `utilities/` directory, its own console
-command, and a `python -m` entry point. The pass supplies arguments and maps JSON
-results and progress back to the pipeline; the operation and output cleanup live
-in the utility.
+Each utility is an independent Python program. It accepts only the parameters
+of its operation, emits progress and a final result on stdout, writes diagnostics
+to stderr, and returns a process exit code. It does not import worker or pipeline
+configuration. Passes assemble arguments and interpret stdout; the worker owns
+sequencing, checkpoints and notifications.
 
 | Operation | Console command | Module under `recon_pipeline` |
 | --- | --- | --- |
@@ -182,14 +182,15 @@ in the utility.
 | Generate dataset | `recon-4danyone` | `datasets.fourdanyone.utilities.inference` |
 | Export synchronized frames | `recon-nerfstudio-export` | `reconstructions.nerfstudio.utilities.export` |
 | Export recording | `recon-rerun` | `artifacts.rerun.utilities.export` |
-| Check AWS dependencies | `recon-aws-preflight` | `workers.aws.utilities.preflight` |
-| Download video | `recon-s3-download-input` | `workers.aws.utilities.download_input` |
-| Sync model cache | `recon-s3-sync-models` | `workers.aws.utilities.sync_models` |
-| Restore source experiment | `recon-s3-restore-experiment` | `workers.aws.utilities.restore_experiment` |
-| Write manifest | `recon-write-run-manifest` | `workers.aws.utilities.write_run_manifest` |
-| Upload results | `recon-s3-upload-results` | `workers.aws.utilities.upload_results` |
+| Check resource access | `recon-aws-preflight` | `cloud.aws.utilities.preflight` |
+| Download video | `recon-s3-download-input` | `storage.s3.utilities.download_input` |
+| Sync model cache | `recon-s3-sync-models` | `storage.s3.utilities.sync_models` |
+| Restore source experiment | `recon-s3-restore-experiment` | `storage.s3.utilities.restore_experiment` |
+| Write manifest | `recon-write-run-manifest` | `artifacts.manifest.utilities.write` |
+| Upload results | `recon-s3-upload-results` | `storage.s3.utilities.upload_results` |
 
-Inspect or debug a single utility without starting the worker:
+Each utility has its own file and can be run with a console command, `python -m`,
+or the Python debugger:
 
 ```bash
 recon-4danyone --help
@@ -197,29 +198,38 @@ python -m recon_pipeline.datasets.fourdanyone.utilities.inference --help
 python -m pdb -m recon_pipeline.datasets.fourdanyone.utilities.inference --help
 ```
 
-AWS utilities accept `--worker-config`: either the existing run JSON or a JSON
-object containing just the AWS worker settings. Local generation and export
-commands use explicit paths and do not need AWS settings.
+Run individual operations with explicit parameters:
 
 ```bash
 export RECON_EXPERIMENT_DIR="$RECON_DATA_ROOT/runs/$RECON_EXPERIMENT_NAME"
 export RECON_GENERATION_DIR="$RECON_EXPERIMENT_DIR/4danyone"
 export RECON_VIDEO_PATH="$RECON_DATA_ROOT/input/$RECON_VIDEO"
 export RECON_MODEL_DIR="$RECON_DATA_ROOT/models"
-export RECON_MATERIALIZED_CONFIG="$RECON_EXPERIMENT_DIR/pipeline-config.json"
 export RECON_RERUN_PATH="$RECON_EXPERIMENT_DIR/rerun/$RECON_EXPERIMENT_NAME.rrd"
 
 recon-aws-preflight \
-  --worker-config "$RECON_RUN_CONFIG" \
-  --require-input-video
+  --region "$CP_AWS_REGION" \
+  --bucket "$CP_4DA_BUCKET" \
+  --input-key "$RECON_INPUT_PREFIX/$RECON_VIDEO" \
+  --models-prefix "$RECON_MODELS_PREFIX" \
+  --write-prefix "$RECON_RUNS_PREFIX"
 
-recon-s3-download-input --worker-config "$RECON_RUN_CONFIG"
-recon-s3-sync-models --worker-config "$RECON_RUN_CONFIG"
+recon-s3-download-input \
+  --region "$CP_AWS_REGION" \
+  --bucket "$CP_4DA_BUCKET" \
+  --key "$RECON_INPUT_PREFIX/$RECON_VIDEO" \
+  --output "$RECON_VIDEO_PATH"
 
-# Prepare a new workspace from a local run config with absolute paths.
-# Alternatively, use a pipeline-config.json saved by an earlier run.
-export RECON_LOCAL_CONFIG="$RECON_PIPELINE_ROOT/config/local-run.example.json"
-recon-prepare-experiment --pipeline-config "$RECON_LOCAL_CONFIG"
+recon-s3-sync-models \
+  --region "$CP_AWS_REGION" \
+  --bucket "$CP_4DA_BUCKET" \
+  --prefix "$RECON_MODELS_PREFIX" \
+  --destination "$RECON_MODEL_DIR"
+
+# Settings are an arbitrary JSON snapshot; preparation does not interpret them.
+recon-prepare-experiment \
+  --directory "$RECON_EXPERIMENT_DIR" \
+  --settings '{"note": "standalone debugging"}'
 
 recon-4danyone \
   --fourdanyone-root "$RECON_FOURDANYONE_ROOT" \
@@ -255,36 +265,64 @@ recon-rerun \
 # Restore a prior experiment instead of generating a new dataset.
 export RECON_SOURCE_EXPERIMENT="leo_three_layers_72views_01"
 recon-s3-restore-experiment \
-  --worker-config "$RECON_RUN_CONFIG" \
-  --experiment "$RECON_SOURCE_EXPERIMENT" \
+  --region "$CP_AWS_REGION" \
+  --bucket "$CP_4DA_BUCKET" \
+  --prefix "$RECON_RUNS_PREFIX/$RECON_SOURCE_EXPERIMENT" \
   --destination "$RECON_DATA_ROOT/runs/$RECON_SOURCE_EXPERIMENT"
 
+export RECON_TOTAL_VIEWS="$((RECON_VIEWS_PER_LAYER * ${#RECON_LAYER_PITCHES[@]}))"
 recon-write-run-manifest \
-  --pipeline-config "$RECON_MATERIALIZED_CONFIG" \
+  --output "$RECON_EXPERIMENT_DIR/pipeline-result.json" \
+  --experiment-name "$RECON_EXPERIMENT_NAME" \
+  --experiment-dir "$RECON_EXPERIMENT_DIR" \
+  --inference-dir "$RECON_GENERATION_DIR" \
+  --num-views "$RECON_TOTAL_VIEWS" \
   --rerun-file "$RECON_RERUN_PATH"
 
 recon-s3-upload-results \
-  --worker-config "$RECON_RUN_CONFIG" \
-  --experiment "$RECON_EXPERIMENT_NAME" \
+  --region "$CP_AWS_REGION" \
+  --bucket "$CP_4DA_BUCKET" \
+  --prefix "$RECON_RUNS_PREFIX/$RECON_EXPERIMENT_NAME" \
   --source "$RECON_EXPERIMENT_DIR"
 ```
 
-Edit the example local config's absolute paths, experiment name and parameters
-before preparing a new workspace. The materialized `pipeline-config.json` is
-also produced automatically by the pipeline's preparation pass.
+Use `--replace-existing` to rebuild an existing inference directory, frame
+dataset or recording. Downloads/restores discard their owned local output;
+uploads delete only the selected S3 prefix before uploading. The pipeline passes
+this flag when rerunning a pass; checkpoint and `--force` behavior is preserved.
+Shared model caches are retained.
 
-For an existing inference directory, frame dataset or recording, explicitly
-pass `--replace-existing` to rebuild it. On downloads/restores the flag discards
-the operation's owned local output; on uploads it deletes only the selected
-experiment's S3 result prefix before uploading. The pipeline supplies this flag
-for passes it reruns, preserving checkpoint/`--force` behavior. Shared model
-caches are retained.
+Stdout is newline-delimited JSON with `event: "progress"` and one final
+`event: "result"`. Diagnostics from upstream libraries/exporters go to stderr.
+Results describe the created artifacts; datasets and recordings remain ordinary
+files. There are no temporary request/response files for communication with the
+worker.
 
-Every utility prints its JSON result after its logs, or writes it to
-`--result-file PATH`. Progress is streamed as `RECON_PROGRESS` JSON lines.
-For a manifest with frame datasets and timings, supply `--datasets PATH` (a JSON
-list of `frame`/`dataset_dir` objects) and `--durations PATH` (a JSON object of pass
-IDs and seconds). Both are optional for manual debugging.
+```json
+{"event": "progress", "fraction": 0.5, "message": "Exported synchronized frame 60"}
+{"event": "result", "data": {"path": "/absolute/path/to/artifact"}}
+```
+
+```bash
+recon-s3-download-input \
+  --bucket "$CP_4DA_BUCKET" \
+  --region "$CP_AWS_REGION" \
+  --key "$RECON_INPUT_PREFIX/$RECON_VIDEO" \
+  --output "$RECON_VIDEO_PATH" \
+  > download-events.jsonl 2> download.log
+```
+
+For a manifest with frame datasets and timings, pass `--datasets` with a JSON
+list of `frame`/`dataset_dir` objects and `--durations` with a JSON object mapping
+operation names to seconds. Both default to empty collections.
+
+The access-check utility can also inspect explicitly selected resources using
+`--sns-topic-name`/`--notification-email`,
+`--telegram-chat-id`/`--telegram-bot-token-env`, and
+`--sagemaker-domain-id`/`--sagemaker-space-name`/`--sagemaker-app-name`.
+It checks channel access without sending notifications or shutting down an app.
+AWS credentials use the standard boto3 environment/role chain; Telegram tokens
+are read from the named environment variable.
 
 ## Validate and inspect
 

@@ -26,12 +26,62 @@ class AwsPreflightPass:
         self.runner = runner or CommandRunner()
 
     def run(self, context: PipelineContext) -> PassResult:
+        worker = self.worker
+        arguments = [
+            "--bucket",
+            worker.bucket_name,
+            "--region",
+            worker.region,
+            "--input-key",
+            worker.bucket.video_key,
+        ]
+        if not self.pipeline_config.dataset_enabled:
+            arguments.append("--no-check-input")
+        if worker.sync_models:
+            arguments.extend(["--models-prefix", worker.models_prefix])
+        if worker.upload_results:
+            arguments.extend(["--write-prefix", worker.runs_prefix])
+        if worker.sns is not None and worker.sns.enabled:
+            arguments.extend(
+                [
+                    "--sns-topic-name",
+                    worker.sns.topic_name,
+                    "--notification-email",
+                    worker.sns.email,
+                ]
+            )
+        env = None
+        if worker.telegram is not None and worker.telegram.enabled:
+            token_env = (
+                worker.telegram.bot_token_env or "RECON_PREFLIGHT_TELEGRAM_TOKEN"
+            )
+            if worker.telegram.bot_token is not None:
+                env = {token_env: worker.telegram.bot_token}
+            arguments.extend(
+                [
+                    "--telegram-chat-id",
+                    worker.telegram.chat_id,
+                    "--telegram-bot-token-env",
+                    token_env,
+                ]
+            )
+        if worker.shutdown_on != "never":
+            arguments.extend(
+                [
+                    "--sagemaker-domain-id",
+                    worker.sagemaker.domain_id,
+                    "--sagemaker-space-name",
+                    worker.sagemaker.space_name,
+                    "--sagemaker-app-name",
+                    worker.sagemaker.app_name,
+                ]
+            )
         health = run_utility(
-            "recon_pipeline.workers.aws.utilities.preflight",
-            ["--require-input-video"] if self.pipeline_config.dataset_enabled else [],
+            "recon_pipeline.cloud.aws.utilities.preflight",
+            arguments,
             context,
             runner=self.runner,
-            documents={"--worker-config": self.worker.to_dict()},
+            env=env,
         )
         return PassResult(
             artifacts={AWS_HEALTH: health},

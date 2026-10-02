@@ -3,7 +3,10 @@ from pathlib import Path
 import pytest
 
 from recon_pipeline.reconstructions.nerfstudio.config import NerfstudioArtifactConfig
-from recon_pipeline.datasets.fourdanyone.config import FourDAnyoneConfig, extract_4danyone_dataset_config
+from recon_pipeline.datasets.fourdanyone.config import (
+    FourDAnyoneConfig,
+    extract_4danyone_dataset_config,
+)
 
 
 def make_config(tmp_path: Path, **changes) -> FourDAnyoneConfig:
@@ -75,21 +78,23 @@ def test_paths_must_be_absolute() -> None:
         )
 
 
-def test_reconstruction_stage_is_not_silently_ignored() -> None:
-    with pytest.raises(ValueError, match="not implemented"):
-        extract_4danyone_dataset_config(
-            {
-                "experiment_name": "leo",
-                "dataset": {"type": "4danyone", "config": {}},
-                "reconstruction": {
-                    "type": "nerfstudio_splatfacto",
-                    "config": {},
-                },
-            }
-        )
+def test_reconstruction_stage_materializes_splatfacto_profile() -> None:
+    payload = extract_4danyone_dataset_config(
+        {
+            "experiment_name": "leo",
+            "dataset": {"type": "4danyone", "config": {}},
+            "reconstruction": {
+                "enabled": True,
+                "type": "nerfstudio_splatfacto",
+                "config": {"frames": [30, 60]},
+            },
+        },
+        artifacts={"dataset": {"nerfstudio": {"enabled": True, "frames": [30, 60]}}},
+    )
+    assert payload["reconstruction"] == {"enabled": True, "frames": [30, 60]}
 
 
-def test_disabled_reconstruction_stage_is_ignored_until_implemented() -> None:
+def test_disabled_reconstruction_stage_ignores_unknown_settings() -> None:
     payload = extract_4danyone_dataset_config(
         {
             "experiment_name": "leo",

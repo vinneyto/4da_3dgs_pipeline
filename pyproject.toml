@@ -19,9 +19,19 @@ rerun = [
   "numpy>=1.26,<3",
   "rerun-sdk>=0.23,<1",
 ]
+splatfacto-rerun = [
+  "rerun-sdk>=0.36,<0.37",
+  "numpy>=1.26,<3",
+  "plyfile>=1.1,<2",
+  "pillow>=10,<13",
+  "tensorboard>=2,<3",
+]
 dev = [
   "numpy>=1.26,<3",
   "pytest>=8,<9",
+  "pillow>=10,<13",
+  "opencv-python-headless>=4.8,<5",
+  "plyfile>=1.1,<2",
   "pyTelegramBotAPI>=4.37,<5",
 ]
 
@@ -31,6 +41,9 @@ recon-config = "recon_pipeline.workers.aws.config_cli:main"
 recon-rerun = "recon_pipeline.utilities.artefacts.rerun.export:main"
 recon-prepare-experiment = "recon_pipeline.utilities.datasets.fourdanyone.prepare_experiment:main"
 recon-4danyone = "recon_pipeline.utilities.datasets.fourdanyone.inference:main"
+recon-prepare-rgba = "recon_pipeline.utilities.reconstructions.nerfstudio.prepare_rgba:main"
+recon-splatfacto = "recon_pipeline.utilities.reconstructions.nerfstudio.splatfacto:main"
+recon-splatfacto-rerun = "recon_pipeline.utilities.artefacts.rerun.splatfacto:main"
 recon-nerfstudio-export = "recon_pipeline.utilities.reconstructions.nerfstudio.export:main"
 recon-aws-preflight = "recon_pipeline.utilities.cloud.aws.preflight:main"
 recon-s3-download-input = "recon_pipeline.utilities.storage.s3.download_input:main"

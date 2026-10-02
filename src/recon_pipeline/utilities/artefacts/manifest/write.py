@@ -10,13 +10,20 @@ from recon_pipeline.utilities._output import run_operation, report_progress
 
 
 def write_manifest(args: argparse.Namespace) -> dict:
-    if not isinstance(args.datasets, list) or not isinstance(args.durations, dict):
+    if (
+        not isinstance(args.datasets, list)
+        or not isinstance(args.durations, dict)
+        or not isinstance(args.reconstructions, list)
+        or not isinstance(args.reconstruction_recordings, list)
+    ):
         raise ValueError("datasets must be a JSON list and durations a JSON object")
     result = {
         "experiment_name": args.experiment_name,
         "experiment_dir": str(args.experiment_dir),
         "inference_dir": str(args.inference_dir),
         "datasets": args.datasets,
+        "reconstructions": args.reconstructions,
+        "reconstruction_recordings": args.reconstruction_recordings,
         "rerun_file": str(args.rerun_file) if args.rerun_file else None,
         "num_views": args.num_views,
         "pass_durations_seconds": args.durations,
@@ -48,6 +55,13 @@ def main(argv: Sequence[str] | None = None) -> None:
         default={},
         help="JSON object mapping operation names to seconds",
     )
+    parser.add_argument(
+        "--reconstructions",
+        type=json.loads,
+        default=[],
+        help="JSON list of trained frame results",
+    )
+    parser.add_argument("--reconstruction-recordings", type=json.loads, default=[])
     parser.add_argument("--rerun-file", type=Path)
     args = parser.parse_args(argv)
     run_operation(lambda: write_manifest(args))

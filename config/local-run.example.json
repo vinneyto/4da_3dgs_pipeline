@@ -11,7 +11,9 @@
         "model_dir": "/absolute/path/to/4danyone-data/models",
         "runs_dir": "/absolute/path/to/4danyone-data/runs",
         "views_per_layer": 24,
-        "layer_pitches": [0],
+        "layer_pitches": [
+          0
+        ],
         "start_yaw": 0,
         "yaw_span": 360,
         "target_fps": 30.0,
@@ -24,7 +26,25 @@
     "reconstruction": {
       "enabled": false,
       "type": "nerfstudio_splatfacto",
-      "config": {}
+      "config": {
+        "nerfstudio_bin": "/absolute/path/to/splatfacto/bin",
+        "frames": null,
+        "max_num_iterations": 60000,
+        "stop_split_at": 32000,
+        "cull_alpha_thresh": 0.02,
+        "densify_grad_thresh": 0.0003,
+        "densify_size_thresh": 0.0075,
+        "split_screen_size": 0.03,
+        "num_downscales": 1,
+        "resolution_schedule": 2000,
+        "cull_scale_thresh": 0.1,
+        "stop_screen_size_at": 32000,
+        "use_scale_regularization": true,
+        "max_gauss_ratio": 10.0,
+        "sh_degree": 2,
+        "mask_threshold": 127,
+        "mask_erosion_pixels": 1
+      }
     }
   },
   "artifacts": {
@@ -32,7 +52,9 @@
       "nerfstudio": {
         "enabled": true,
         "source_experiment_name": "leo_one_layer_24views_01",
-        "frames": [60],
+        "frames": [
+          60
+        ],
         "device": "cuda:0",
         "replace_existing": false
       },
@@ -50,7 +72,9 @@
         "source_experiment_name": "leo_one_layer_24views_01",
         "view_count": 4,
         "device": "auto",
-        "replace_existing": false
+        "replace_existing": false,
+        "python": "/absolute/path/to/splatfacto-rerun/bin/python",
+        "max_splats": 100000
       }
     }
   }

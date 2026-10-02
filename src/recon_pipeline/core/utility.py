@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -44,6 +45,7 @@ def run_utility(
     *,
     runner: CommandRunner | None = None,
     env: Mapping[str, str] | None = None,
+    python: str | Path | None = None,
 ) -> dict[str, Any]:
     result = None
 
@@ -58,9 +60,25 @@ def run_utility(
             result = event["data"]
         handle_progress(context, line)
 
+    if python is not None:
+        # Make the installed/source package available in a manually managed environment.
+        package_root = str(Path(__file__).resolve().parents[2])
+        inherited = (env or {}).get("PYTHONPATH", os.environ.get("PYTHONPATH", ""))
+        env = {
+            **(env or {}),
+            "PYTHONPATH": os.pathsep.join(
+                part for part in (package_root, inherited) if part
+            ),
+        }
     options = {"env": env} if env is not None else {}
     (runner or CommandRunner()).run(
-        [sys.executable, "-u", "-m", module, *arguments],
+        [
+            str(python) if python is not None else sys.executable,
+            "-u",
+            "-m",
+            module,
+            *arguments,
+        ],
         cwd=Path.cwd(),
         on_line=on_stdout,
         **options,

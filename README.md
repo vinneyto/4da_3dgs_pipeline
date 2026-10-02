@@ -185,6 +185,9 @@ sequencing, checkpoints and notifications.
 | --- | --- | --- |
 | Prepare workspace | `recon-prepare-experiment` | `utilities.datasets.fourdanyone.prepare_experiment` |
 | Generate dataset | `recon-4danyone` | `utilities.datasets.fourdanyone.inference` |
+| Prepare RGBA training copy | `recon-prepare-rgba` | `utilities.reconstructions.nerfstudio.prepare_rgba` |
+| Train and export one frame | `recon-splatfacto` | `utilities.reconstructions.nerfstudio.splatfacto` |
+| Record trained Gaussian scene | `recon-splatfacto-rerun` | `utilities.artefacts.rerun.splatfacto` |
 | Export synchronized frames | `recon-nerfstudio-export` | `utilities.reconstructions.nerfstudio.export` |
 | Export recording | `recon-rerun` | `utilities.artefacts.rerun.export` |
 | Check resource access | `recon-aws-preflight` | `utilities.cloud.aws.preflight` |
@@ -330,6 +333,72 @@ in the worker process after the AWS utility succeeds. Worker observers send
 notifications based on pass lifecycle events and progress parsed from stdout.
 Telegram access uses the synchronous `pyTelegramBotAPI` client, included in the
 `aws` extra; tokens are resolved only inside the worker.
+
+## Reconstruct one or more static frames
+
+This stage follows the working [Splatfacto Colab](https://colab.research.google.com/drive/1yJ7sgxn7TxiW0m5CASOdGU5bD04tzzLq): private RGB+mask-to-RGBA copies, stock Splatfacto with random backgrounds and all input cameras, then a full Gaussian PLY with SH coefficients. The default profile is 60,000 iterations, SH degree 2, threshold 127 and 1px mask erosion. Source datasets are preserved.
+
+Install the upstream tools manually in a separate environment. The notebook uses Python 3.11, PyTorch 2.2.2+cu121, torchvision 0.17.2+cu121, Nerfstudio 1.1.5 and gsplat 1.4.0. That environment also needs NumPy, Pillow, OpenCV, ninja and a working CUDA toolkit. Set `pipeline.reconstruction.config.nerfstudio_bin` to its `bin` directory containing `python`, `ns-train` and `ns-export`. The pipeline never installs packages or patches Nerfstudio.
+
+The ready-to-edit `config/splatfacto-run.example.json` trains frame 60 from a saved 4DAnyone experiment and exports its reconstruction recording. Set its bucket, source experiment, local paths and environment paths before running.
+
+Enable `pipeline.reconstruction.enabled` in the JSON. Leave `config.frames` as `null` to train every frame listed in `artifacts.dataset.nerfstudio.frames`, or supply a subset. The Nerfstudio dataset artifact must be enabled. To use an existing 4DAnyone run, disable `pipeline.dataset.enabled` and select its name in `artifacts.dataset.nerfstudio.source_experiment_name`.
+
+The generator also accepts `--reconstruction`, `--nerfstudio-bin`, `--reconstruction-frames`, and `--splatfacto-*` profile options. JSON examples contain the complete profile even when reconstruction is disabled. Each selected frame gets its own training pass and durable checkpoint. Restart skips completed frames; `--force` reruns them.
+
+Run one frame independently, using the same environment as the pipeline:
+
+```bash
+export RECON_NS_BIN="$HOME/.conda/envs/splatfacto/bin"
+export RECON_STATIC_DATASET="$RECON_DATA_ROOT/runs/$RECON_EXPERIMENT_NAME/nerfstudio/frame_060"
+export RECON_STATIC_OUTPUT="$RECON_DATA_ROOT/runs/$RECON_EXPERIMENT_NAME/splatfacto/frame_060"
+export RECON_TRAINING_NAME="${RECON_EXPERIMENT_NAME}_frame_060"
+export RECON_ITERATIONS="60000"
+export RECON_STOP_SPLIT="32000"
+export RECON_CULL_ALPHA="0.02"
+export RECON_DENSIFY_GRAD="0.0003"
+export RECON_DENSIFY_SIZE="0.0075"
+export RECON_SPLIT_SCREEN="0.03"
+export RECON_DOWNSCALES="1"
+export RECON_RESOLUTION_SCHEDULE="2000"
+export RECON_CULL_SCALE="0.10"
+export RECON_STOP_SCREEN="32000"
+export RECON_MAX_GAUSS_RATIO="10.0"
+export RECON_SH_DEGREE="2"
+export RECON_MASK_THRESHOLD="127"
+export RECON_MASK_EROSION="1"
+
+PYTHONPATH="$RECON_PIPELINE_ROOT/src${PYTHONPATH:+:$PYTHONPATH}" \
+  "$RECON_NS_BIN/python" -m recon_pipeline.utilities.reconstructions.nerfstudio.splatfacto \
+  --dataset "$RECON_STATIC_DATASET" \
+  --output "$RECON_STATIC_OUTPUT" \
+  --nerfstudio-bin "$RECON_NS_BIN" \
+  --experiment-name "$RECON_TRAINING_NAME" \
+  --max-num-iterations "$RECON_ITERATIONS" \
+  --stop-split-at "$RECON_STOP_SPLIT" \
+  --cull-alpha-thresh "$RECON_CULL_ALPHA" \
+  --densify-grad-thresh "$RECON_DENSIFY_GRAD" \
+  --densify-size-thresh "$RECON_DENSIFY_SIZE" \
+  --split-screen-size "$RECON_SPLIT_SCREEN" \
+  --num-downscales "$RECON_DOWNSCALES" \
+  --resolution-schedule "$RECON_RESOLUTION_SCHEDULE" \
+  --cull-scale-thresh "$RECON_CULL_SCALE" \
+  --stop-screen-size-at "$RECON_STOP_SCREEN" \
+  --use-scale-regularization \
+  --max-gauss-ratio "$RECON_MAX_GAUSS_RATIO" \
+  --sh-degree "$RECON_SH_DEGREE" \
+  --mask-threshold "$RECON_MASK_THRESHOLD" \
+  --mask-erosion-pixels "$RECON_MASK_EROSION" \
+  > splatfacto-events.jsonl 2> splatfacto.log
+```
+
+For preparation alone, run `recon-prepare-rgba --dataset ... --output ... --mask-threshold ... --mask-erosion-pixels ...` in an environment with NumPy, Pillow and OpenCV. Every utility also supports `--help` without GPU imports. Existing standalone output directories require an explicit `--replace-existing`.
+
+Outputs for each frame live in `splatfacto/frame_NNN/`: the RGBA training dataset, Nerfstudio config/checkpoints, `dataparser_transforms.json`, TensorBoard events, training/export logs, `exports/splat.ply`, and `experiment_manifest.json`. The Gaussian PLY is checked for positions, scales, rotations, opacity, DC and higher SH coefficients. `pipeline-result.json` lists all reconstructed frames; the regular result upload includes their outputs.
+
+For the notebook's optional reconstruction recording, enable `artifacts.reconstruction.rerun.enabled` and set its `python` to a separately installed Rerun environment. It needs Rerun 0.36, NumPy, Pillow, plyfile and TensorBoard (the `splatfacto-rerun` extra describes those dependencies). The generator accepts `--reconstruction-rerun`, `--reconstruction-rerun-python`, `--reconstruction-rerun-max-splats` and `--reconstruction-rerun-view-count`.
+
+A separate recording pass per frame writes `rerun/reconstruction.rrd`, with aligned cameras, four selected views, metrics and a Gaussian-center debug view. `max_splats` limits only the Rerun sample; the full `exports/splat.ply` stays intact. Reconstruction recordings currently use the current run's freshly trained models; cross-experiment recording-only runs are rejected explicitly.
 
 ## Validate and inspect
 

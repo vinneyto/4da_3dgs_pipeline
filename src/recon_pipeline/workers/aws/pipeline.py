@@ -5,9 +5,14 @@ from __future__ import annotations
 from pathlib import Path
 
 from recon_pipeline.datasets.fourdanyone.config import FourDAnyoneConfig
-from recon_pipeline.datasets.fourdanyone.passes import FourDAnyoneInferencePass, PrepareExperimentPass
+from recon_pipeline.datasets.fourdanyone.passes import (
+    FourDAnyoneInferencePass,
+    PrepareExperimentPass,
+)
 from recon_pipeline.reconstructions.nerfstudio.passes import NerfstudioExportPass
 from recon_pipeline.core import JsonPassCheckpointStore, Pipeline
+from recon_pipeline.reconstructions.nerfstudio.passes.splatfacto import SplatfactoPass
+from recon_pipeline.artifacts.rerun.passes.splatfacto import SplatfactoRerunPass
 from recon_pipeline.artifacts.rerun.passes import RerunExportPass
 
 from .config import AwsWorkerConfig
@@ -44,7 +49,9 @@ def required_source_experiments(
         config.dataset_enabled
         and config.rerun_source_experiment_name == config.experiment_name
     ):
-        sources[config.rerun_source_experiment_name] = config.rerun_source_experiment_dir
+        sources[config.rerun_source_experiment_name] = (
+            config.rerun_source_experiment_dir
+        )
     return sources
 
 
@@ -69,6 +76,11 @@ def build_aws_pipeline(
         passes.append(FourDAnyoneInferencePass(config))
     if config.nerfstudio.enabled:
         passes.append(NerfstudioExportPass(config))
+    if config.reconstruction.enabled:
+        for frame in config.reconstruction_frames:
+            passes.append(SplatfactoPass(config, frame))
+            if config.reconstruction_rerun.enabled:
+                passes.append(SplatfactoRerunPass(config, frame))
     if config.rerun.enabled:
         passes.append(RerunExportPass(config))
     passes.append(WriteRunManifestPass(config))

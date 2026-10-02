@@ -50,11 +50,12 @@ def test_generator_writes_a_valid_worker_document(tmp_path: Path) -> None:
         "device": "cuda:0",
         "replace_existing": False,
     }
-    assert raw["pipeline"]["reconstruction"] == {
-        "enabled": False,
-        "type": "nerfstudio_splatfacto",
-        "config": {},
-    }
+    stage = raw["pipeline"]["reconstruction"]
+    assert stage["enabled"] is False
+    assert stage["type"] == "nerfstudio_splatfacto"
+    assert stage["config"]["max_num_iterations"] == 60000
+    assert stage["config"]["mask_erosion_pixels"] == 1
+    assert stage["config"]["frames"] is None
     assert raw["artifacts"]["reconstruction"] == {
         "rerun": {
             "enabled": False,
@@ -62,6 +63,8 @@ def test_generator_writes_a_valid_worker_document(tmp_path: Path) -> None:
             "view_count": 4,
             "device": "auto",
             "replace_existing": False,
+            "python": None,
+            "max_splats": 100000,
         }
     }
     assert pipeline.experiment_name == "leo_one_layer_24views_01"
@@ -73,7 +76,9 @@ def test_generator_writes_a_valid_worker_document(tmp_path: Path) -> None:
     assert worker.bucket.name == "cp-4da-test"
     assert raw["aws_worker"]["sagemaker"]["app_name"] == "default"
     assert raw["aws_worker"]["bucket"]["video"] == "leo.MOV"
-    assert worker.local_video_path == Path("/home/sagemaker-user/4danyone-data/input/leo.MOV")
+    assert worker.local_video_path == Path(
+        "/home/sagemaker-user/4danyone-data/input/leo.MOV"
+    )
 
 
 def test_generator_refuses_to_replace_a_document_without_force(tmp_path: Path) -> None:
@@ -84,6 +89,38 @@ def test_generator_refuses_to_replace_a_document_without_force(tmp_path: Path) -
         main(arguments(output))
 
     assert output.read_text() == "do not replace"
+
+
+def test_generator_enables_reconstruction_and_overrides_profile(tmp_path):
+    output = tmp_path / "run.json"
+    main(
+        [
+            *arguments(output),
+            "--nerfstudio-frames",
+            "30",
+            "60",
+            "--reconstruction",
+            "--reconstruction-frames",
+            "60",
+            "--nerfstudio-bin",
+            "/tools/splatfacto/bin",
+            "--splatfacto-max-num-iterations",
+            "500",
+            "--splatfacto-sh-degree",
+            "1",
+            "--reconstruction-rerun",
+            "--reconstruction-rerun-python",
+            "/tools/rerun/bin/python",
+        ]
+    )
+    pipeline, _ = load_aws_worker_config(output)
+    assert pipeline.reconstruction.enabled
+    assert pipeline.reconstruction_frames == (60,)
+    assert pipeline.reconstruction.max_num_iterations == 500
+    assert pipeline.reconstruction.sh_degree == 1
+    assert pipeline.reconstruction.nerfstudio_bin == "/tools/splatfacto/bin"
+    assert pipeline.reconstruction_rerun.python == "/tools/rerun/bin/python"
+    assert pipeline.reconstruction_rerun.enabled
 
 
 def test_generator_can_replace_a_document_with_force(tmp_path: Path) -> None:
@@ -137,7 +174,9 @@ def test_generator_clones_template_with_new_identity_and_video(tmp_path: Path) -
     assert cloned["aws_worker"]["bucket"]["name"] == "cp-4da-test"
     assert cloned["pipeline"] == source["pipeline"]
     assert cloned["environment"] == source["environment"]
-    assert cloned["aws_worker"]["notifications"] == source["aws_worker"]["notifications"]
+    assert (
+        cloned["aws_worker"]["notifications"] == source["aws_worker"]["notifications"]
+    )
     assert cloned["aws_worker"]["shutdown_on"] == "always"
     assert cloned["artifacts"]["dataset"]["nerfstudio"]["source_experiment_name"] == (
         "alex_three_layers_72views_01"
@@ -190,7 +229,15 @@ def test_template_clone_requires_identity_and_video(
     main(arguments(template))
 
     with pytest.raises(SystemExit):
-        main(["--template", str(template), "--output", str(tmp_path / "out.json"), *extra])
+        main(
+            [
+                "--template",
+                str(template),
+                "--output",
+                str(tmp_path / "out.json"),
+                *extra,
+            ]
+        )
 
     assert message in capsys.readouterr().err
 
@@ -230,6 +277,7 @@ def test_loader_ignores_legacy_noisy_telegram_options(tmp_path: Path) -> None:
 
     assert worker.telegram is not None
     assert worker.telegram.chat_id == "123456"
+
 
 def test_generator_supports_explicit_notification_switches(tmp_path: Path) -> None:
     output = tmp_path / "run.json"

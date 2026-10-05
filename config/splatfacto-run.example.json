@@ -13,10 +13,10 @@
     "opencv_fallback_version": "4.14.0.94",
     "lock_file": "/home/sagemaker-user/4danyone-data/environment/requirements-lock.txt"
   },
-  "experiment_name": "leo_one_layer_24views_01",
+  "experiment_name": "leo_frame_060_splatfacto_05_official_rgba",
   "pipeline": {
     "dataset": {
-      "enabled": true,
+      "enabled": false,
       "type": "4danyone",
       "config": {
         "views_per_layer": 24,
@@ -33,7 +33,7 @@
       }
     },
     "reconstruction": {
-      "enabled": false,
+      "enabled": true,
       "type": "nerfstudio_splatfacto",
       "config": {
         "nerfstudio_bin": "/home/sagemaker-user/.conda/envs/splatfacto/bin",
@@ -68,7 +68,7 @@
         "replace_existing": false
       },
       "rerun": {
-        "enabled": true,
+        "enabled": false,
         "source_experiment_name": "leo_one_layer_24views_01",
         "view_count": 4,
         "device": "auto",
@@ -77,8 +77,8 @@
     },
     "reconstruction": {
       "rerun": {
-        "enabled": false,
-        "source_experiment_name": "leo_one_layer_24views_01",
+        "enabled": true,
+        "source_experiment_name": "leo_frame_060_splatfacto_05_official_rgba",
         "view_count": 4,
         "device": "auto",
         "replace_existing": false,
@@ -88,7 +88,7 @@
     }
   },
   "aws_worker": {
-    "job_id": "leo_one_layer_24views_01",
+    "job_id": "leo_frame_060_splatfacto_05_official_rgba",
     "region": "us-east-1",
     "bucket": {
       "name": "cp-4da-REPLACE_WITH_DEPLOYMENT_ID",

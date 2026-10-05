@@ -75,6 +75,41 @@ def test_artifact_only_plan_restores_shared_source_once(tmp_path: Path) -> None:
     assert "rerun-export" in ids
 
 
+def test_reconstruction_plan_has_one_training_and_recording_pass_per_frame(tmp_path):
+    from recon_pipeline.reconstructions.nerfstudio.splatfacto_config import (
+        SplatfactoConfig,
+        SplatfactoRerunConfig,
+    )
+
+    worker = make_worker_config(tmp_path)
+    config = make_pipeline_config(
+        tmp_path,
+        dataset_enabled=False,
+        nerfstudio=NerfstudioArtifactConfig(
+            frames=(30, 60, 90), source_experiment_name="original"
+        ),
+        reconstruction=SplatfactoConfig(enabled=True, frames=(30, 90)),
+        reconstruction_rerun=SplatfactoRerunConfig(enabled=True),
+    )
+    pipeline = build_aws_pipeline(
+        worker, config, tmp_path / "job", JobStatus(job_id=worker.job_id)
+    )
+    ids = [item.id for item in pipeline.prepare().passes]
+    assert ids == [
+        "aws-preflight",
+        "s3-sync-models",
+        "s3-restore-experiment:original",
+        "prepare-experiment",
+        "nerfstudio-export",
+        "splatfacto:frame_030",
+        "splatfacto-rerun:frame_030",
+        "splatfacto:frame_090",
+        "splatfacto-rerun:frame_090",
+        "write-run-manifest",
+        "s3-upload-results",
+    ]
+
+
 @pytest.mark.parametrize(
     ("policy", "failed", "expected"),
     [

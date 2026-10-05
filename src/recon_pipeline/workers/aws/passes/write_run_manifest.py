@@ -10,6 +10,12 @@ from recon_pipeline.datasets.fourdanyone.config import FourDAnyoneConfig
 from recon_pipeline.reconstructions.nerfstudio.passes import NERFSTUDIO_DATASETS
 from recon_pipeline.artifacts.rerun.passes import RERUN_RECORDING
 from ..artifacts import RUN_RESULT
+from recon_pipeline.reconstructions.nerfstudio.passes.splatfacto import (
+    splatfacto_artifact,
+)
+from recon_pipeline.artifacts.rerun.passes.splatfacto import (
+    splatfacto_recording_artifact,
+)
 
 
 class WriteRunManifestPass:
@@ -23,6 +29,22 @@ class WriteRunManifestPass:
     ) -> None:
         self.config = config
         self.runner = runner or CommandRunner()
+        self.requires = frozenset(
+            {EXPERIMENT_WORKSPACE}
+            | (
+                {splatfacto_artifact(frame) for frame in config.reconstruction_frames}
+                if config.reconstruction.enabled
+                else set()
+            )
+            | (
+                {
+                    splatfacto_recording_artifact(frame)
+                    for frame in config.reconstruction_frames
+                }
+                if config.reconstruction_rerun.enabled
+                else set()
+            )
+        )
 
     def run(self, context: PipelineContext) -> PassResult:
         arguments = (
@@ -44,6 +66,22 @@ class WriteRunManifestPass:
                 str(self.config.num_views),
                 "--datasets",
                 json.dumps(context.artifacts.get(NERFSTUDIO_DATASETS, [])),
+                "--reconstructions",
+                json.dumps(
+                    [
+                        value
+                        for key, value in context.artifacts.items()
+                        if key.startswith("reconstruction.splatfacto:")
+                    ]
+                ),
+                "--reconstruction-recordings",
+                json.dumps(
+                    [
+                        value
+                        for key, value in context.artifacts.items()
+                        if key.startswith("recording.splatfacto:")
+                    ]
+                ),
                 "--durations",
                 json.dumps(dict(context.values.get("pass_durations", {}))),
             ]

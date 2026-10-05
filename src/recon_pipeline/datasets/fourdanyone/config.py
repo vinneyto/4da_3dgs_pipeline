@@ -9,7 +9,10 @@ from typing import Any
 
 from recon_pipeline.reconstructions.nerfstudio.config import NerfstudioArtifactConfig
 from recon_pipeline.artifacts.rerun.config import RerunConfig
-
+from recon_pipeline.reconstructions.nerfstudio.splatfacto_config import (
+    SplatfactoConfig,
+    SplatfactoRerunConfig,
+)
 
 DEFAULT_LAYER_PITCHES = (-15, 0, 15)
 SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5, 6})
@@ -26,7 +29,9 @@ def _migrate_legacy_nerfstudio_artifact(
     legacy: dict[str, Any] = {}
     if "frame" in values:
         if "frame_indices" in values:
-            raise ValueError("pipeline must use either frame or frame_indices, not both")
+            raise ValueError(
+                "pipeline must use either frame or frame_indices, not both"
+            )
         legacy["frames"] = [values.pop("frame")]
     elif "frame_indices" in values:
         legacy["frames"] = values.pop("frame_indices")
@@ -103,41 +108,44 @@ def extract_4danyone_dataset_config(
         dataset_artifacts.get("nerfstudio"),
     )
     if "rerun" in values and rerun_payload is not None:
-        raise ValueError(
-            "configure Rerun in root artifacts, not dataset.config"
-        )
+        raise ValueError("configure Rerun in root artifacts, not dataset.config")
     values["dataset_enabled"] = dataset_enabled
     values["nerfstudio"] = nerfstudio_payload
     values["rerun"] = rerun_payload
 
     reconstruction = pipeline.get("reconstruction")
-    if reconstruction is not None:
-        if not isinstance(reconstruction, dict):
-            raise TypeError("pipeline.reconstruction must be an object")
-        reconstruction_enabled = reconstruction.get("enabled", True)
-        if not isinstance(reconstruction_enabled, bool):
-            raise TypeError("pipeline.reconstruction.enabled must be a boolean")
-        if reconstruction_enabled:
-            raise ValueError(
-                "pipeline.reconstruction is enabled, but 3DGS reconstruction "
-                "is not implemented yet"
-            )
+    if reconstruction is None:
+        reconstruction = {}
+    if not isinstance(reconstruction, dict):
+        raise TypeError("pipeline.reconstruction must be an object")
+    enabled = reconstruction.get("enabled", bool(reconstruction))
+    if not isinstance(enabled, bool):
+        raise TypeError("pipeline.reconstruction.enabled must be a boolean")
+    if enabled and reconstruction.get("type") != "nerfstudio_splatfacto":
+        raise ValueError("unsupported pipeline.reconstruction.type")
+    settings = reconstruction.get("config", {})
+    if not isinstance(settings, dict):
+        raise TypeError("pipeline.reconstruction.config must be an object")
+    values["reconstruction"] = {**(settings if enabled else {}), "enabled": enabled}
     reconstruction_artifacts = root_artifacts.get("reconstruction", {})
     if not isinstance(reconstruction_artifacts, dict):
         raise TypeError("artifacts.reconstruction must be an object")
-    reconstruction_rerun = RerunConfig.from_dict(
-        reconstruction_artifacts.get("rerun")
-    )
-    if reconstruction_rerun.enabled:
+    values["reconstruction_rerun"] = reconstruction_artifacts.get("rerun")
+    if (
+        SplatfactoRerunConfig.from_dict(values["reconstruction_rerun"]).enabled
+        and not enabled
+    ):
         raise ValueError(
-            "artifacts.reconstruction.rerun is enabled, but 3DGS reconstruction "
-            "artifacts are not implemented yet"
+            "artifacts.reconstruction.rerun requires an enabled reconstruction stage"
         )
     rerun_enabled = RerunConfig.from_dict(rerun_payload).enabled
-    nerfstudio_enabled = NerfstudioArtifactConfig.from_dict(
-        nerfstudio_payload
-    ).enabled
-    if not dataset_enabled and not nerfstudio_enabled and not rerun_enabled:
+    nerfstudio_enabled = NerfstudioArtifactConfig.from_dict(nerfstudio_payload).enabled
+    if (
+        not dataset_enabled
+        and not nerfstudio_enabled
+        and not rerun_enabled
+        and not enabled
+    ):
         raise ValueError("no pipeline stage or artifact is enabled")
     return values
 
@@ -160,6 +168,7 @@ def load_pipeline_config(path: Path) -> "FourDAnyoneConfig":
         )
     )
 
+
 @dataclass(frozen=True, slots=True)
 class FourDAnyoneConfig:
     """One 4DAnyone inference followed by one or more static 3DGS exports."""
@@ -181,13 +190,17 @@ class FourDAnyoneConfig:
     dataset_enabled: bool = True
     nerfstudio: NerfstudioArtifactConfig = NerfstudioArtifactConfig()
     rerun: RerunConfig = RerunConfig()
+    reconstruction: SplatfactoConfig = SplatfactoConfig()
+    reconstruction_rerun: SplatfactoRerunConfig = SplatfactoRerunConfig()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "video_path", Path(self.video_path))
         object.__setattr__(self, "fourdanyone_root", Path(self.fourdanyone_root))
         object.__setattr__(self, "model_dir", Path(self.model_dir))
         object.__setattr__(self, "runs_dir", Path(self.runs_dir))
-        object.__setattr__(self, "layer_pitches", tuple(int(value) for value in self.layer_pitches))
+        object.__setattr__(
+            self, "layer_pitches", tuple(int(value) for value in self.layer_pitches)
+        )
         if isinstance(self.nerfstudio, (dict, bool)):
             object.__setattr__(
                 self,
@@ -196,6 +209,16 @@ class FourDAnyoneConfig:
             )
         if isinstance(self.rerun, dict):
             object.__setattr__(self, "rerun", RerunConfig.from_dict(self.rerun))
+        if isinstance(self.reconstruction, dict):
+            object.__setattr__(
+                self, "reconstruction", SplatfactoConfig.from_dict(self.reconstruction)
+            )
+        if isinstance(self.reconstruction_rerun, (dict, bool)):
+            object.__setattr__(
+                self,
+                "reconstruction_rerun",
+                SplatfactoRerunConfig.from_dict(self.reconstruction_rerun),
+            )
         self.validate_values()
 
     @property
@@ -213,6 +236,14 @@ class FourDAnyoneConfig:
     @property
     def datasets_dir(self) -> Path:
         return self.experiment_dir / "nerfstudio"
+
+    @property
+    def reconstruction_dir(self) -> Path:
+        return self.experiment_dir / "splatfacto"
+
+    @property
+    def reconstruction_frames(self) -> tuple[int, ...]:
+        return self.reconstruction.frames or self.nerfstudio.frames
 
     @property
     def nerfstudio_source_experiment_name(self) -> str:
@@ -256,10 +287,17 @@ class FourDAnyoneConfig:
             "model_dir": self.model_dir,
             "runs_dir": self.runs_dir,
         }
-        relative = [f"{name}: {path}" for name, path in paths.items() if not path.is_absolute()]
+        relative = [
+            f"{name}: {path}" for name, path in paths.items() if not path.is_absolute()
+        ]
         if relative:
-            raise ValueError("all paths must be absolute:\n" + "\n".join(f" - {item}" for item in relative))
-        if not self.experiment_name or any(part in self.experiment_name for part in ("/", "\\", "..")):
+            raise ValueError(
+                "all paths must be absolute:\n"
+                + "\n".join(f" - {item}" for item in relative)
+            )
+        if not self.experiment_name or any(
+            part in self.experiment_name for part in ("/", "\\", "..")
+        ):
             raise ValueError("experiment_name must be a simple directory name")
         if self.views_per_layer < 1:
             raise ValueError("views_per_layer must be positive")
@@ -273,9 +311,32 @@ class FourDAnyoneConfig:
             raise ValueError("yaw_span must be between 1 and 360")
         if self.target_fps <= 0:
             raise ValueError("target_fps must be positive")
+        if self.reconstruction.enabled:
+            if not self.nerfstudio.enabled:
+                raise ValueError(
+                    "Splatfacto reconstruction requires artifacts.dataset.nerfstudio"
+                )
+            if not set(self.reconstruction_frames) <= set(self.nerfstudio.frames):
+                raise ValueError(
+                    "reconstruction.frames must be exported Nerfstudio frames"
+                )
+        if self.reconstruction_rerun.enabled:
+            if not self.reconstruction.enabled:
+                raise ValueError(
+                    "artifacts.reconstruction.rerun requires reconstruction"
+                )
+            source = self.reconstruction_rerun.source_experiment_name
+            if source is not None and source != self.experiment_name:
+                raise ValueError(
+                    "reconstruction.rerun source must be the current experiment"
+                )
+
     def validate_paths(self) -> None:
         required = [
-            (self.fourdanyone_root / "third_party/GVHMR/hmr4d/__init__.py", "GVHMR submodule"),
+            (
+                self.fourdanyone_root / "third_party/GVHMR/hmr4d/__init__.py",
+                "GVHMR submodule",
+            ),
         ]
         if self.dataset_enabled:
             required.extend(
@@ -314,13 +375,22 @@ class FourDAnyoneConfig:
             ):
                 required.extend(
                     [
-                        (self.rerun_generation_dir / "metadata.json", "Rerun source metadata"),
-                        (self.rerun_generation_dir / "cameras.json", "Rerun source cameras"),
+                        (
+                            self.rerun_generation_dir / "metadata.json",
+                            "Rerun source metadata",
+                        ),
+                        (
+                            self.rerun_generation_dir / "cameras.json",
+                            "Rerun source cameras",
+                        ),
                     ]
                 )
         missing = [f"{label}: {path}" for path, label in required if not path.is_file()]
         if missing:
-            raise FileNotFoundError("Missing required paths:\n" + "\n".join(f" - {item}" for item in missing))
+            raise FileNotFoundError(
+                "Missing required paths:\n"
+                + "\n".join(f" - {item}" for item in missing)
+            )
         if not self.model_dir.is_dir():
             raise FileNotFoundError(f"model directory does not exist: {self.model_dir}")
 
@@ -338,10 +408,18 @@ class FourDAnyoneConfig:
             values.get("nerfstudio")
         )
         values["rerun"] = RerunConfig.from_dict(values.get("rerun"))
+        values["reconstruction"] = SplatfactoConfig.from_dict(
+            values.get("reconstruction")
+        )
+        values["reconstruction_rerun"] = SplatfactoRerunConfig.from_dict(
+            values.get("reconstruction_rerun")
+        )
         return cls(**values)
 
     def write_json(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_suffix(path.suffix + ".tmp")
-        temporary.write_text(json.dumps(self.to_dict(), indent=2, sort_keys=True) + "\n")
+        temporary.write_text(
+            json.dumps(self.to_dict(), indent=2, sort_keys=True) + "\n"
+        )
         temporary.replace(path)

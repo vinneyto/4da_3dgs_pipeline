@@ -4,12 +4,17 @@ from __future__ import annotations
 
 import argparse
 import copy
+from dataclasses import asdict
 import json
 from pathlib import Path
 from typing import Any, Sequence
 from urllib.parse import urlparse
 
 from .config import AwsWorkerConfig, load_document, materialize_pipeline_config
+from recon_pipeline.utilities.reconstructions.nerfstudio._profile import (
+    TrainingProfile,
+    add_profile_arguments,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -18,7 +23,9 @@ def build_parser() -> argparse.ArgumentParser:
         description="Generate a validated schema-v6 JSON document for recon-aws-worker.",
     )
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--force", action="store_true", help="Replace an existing output file")
+    parser.add_argument(
+        "--force", action="store_true", help="Replace an existing output file"
+    )
     parser.add_argument(
         "--template",
         type=Path,
@@ -83,9 +90,13 @@ def build_parser() -> argparse.ArgumentParser:
     pipeline.add_argument("--yaw-span", type=int, default=360)
     pipeline.add_argument("--target-fps", type=float, default=30.0)
     pipeline.add_argument("--seed", type=int, default=42)
-    pipeline.add_argument("--turbo", action=argparse.BooleanOptionalAction, default=True)
+    pipeline.add_argument(
+        "--turbo", action=argparse.BooleanOptionalAction, default=True
+    )
     pipeline.add_argument("--attention-backend", default="auto")
-    pipeline.add_argument("--resume", action=argparse.BooleanOptionalAction, default=False)
+    pipeline.add_argument(
+        "--resume", action=argparse.BooleanOptionalAction, default=False
+    )
 
     nerfstudio = parser.add_argument_group("Nerfstudio dataset artifact")
     nerfstudio.add_argument(
@@ -136,6 +147,28 @@ def build_parser() -> argparse.ArgumentParser:
         default=False,
     )
 
+    reconstruction = parser.add_argument_group("Static frame Splatfacto reconstruction")
+    reconstruction.add_argument(
+        "--reconstruction", action=argparse.BooleanOptionalAction, default=False
+    )
+    reconstruction.add_argument("--reconstruction-frames", type=int, nargs="+")
+    reconstruction.add_argument(
+        "--nerfstudio-bin",
+        type=Path,
+        default=Path("/home/sagemaker-user/.conda/envs/splatfacto/bin"),
+    )
+    add_profile_arguments(reconstruction, prefix="splatfacto-")
+    reconstruction.add_argument(
+        "--reconstruction-rerun", action=argparse.BooleanOptionalAction, default=False
+    )
+    reconstruction.add_argument("--reconstruction-rerun-python", type=Path)
+    reconstruction.add_argument(
+        "--reconstruction-rerun-max-splats", type=int, default=100_000
+    )
+    reconstruction.add_argument(
+        "--reconstruction-rerun-view-count", type=int, default=4
+    )
+
     aws = parser.add_argument_group("AWS worker")
     video = aws.add_mutually_exclusive_group()
     video.add_argument("--video", help="Path relative to the bucket input prefix")
@@ -143,13 +176,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--s3-video-path",
         help="Deprecated full S3 input URI; use --bucket and --video",
     )
-    aws.add_argument("--bucket", help="Required with --video; inferred for legacy S3 URIs")
+    aws.add_argument(
+        "--bucket", help="Required with --video; inferred for legacy S3 URIs"
+    )
     aws.add_argument("--region", default="us-east-1")
     aws.add_argument("--input-prefix", default="input")
     aws.add_argument("--models-prefix", default="models")
     aws.add_argument("--runs-prefix", default="runs")
-    aws.add_argument("--sync-models", action=argparse.BooleanOptionalAction, default=True)
-    aws.add_argument("--upload-results", action=argparse.BooleanOptionalAction, default=True)
+    aws.add_argument(
+        "--sync-models", action=argparse.BooleanOptionalAction, default=True
+    )
+    aws.add_argument(
+        "--upload-results", action=argparse.BooleanOptionalAction, default=True
+    )
     aws.add_argument(
         "--shutdown-on",
         choices=("never", "success", "failure", "always"),
@@ -216,7 +255,9 @@ def _resolve_bucket(s3_video_path: str, explicit_bucket: str | None) -> str:
     parsed = urlparse(s3_video_path)
     if parsed.scheme == "s3" and parsed.netloc:
         return parsed.netloc
-    raise ValueError("--bucket is required when --s3-video-path is not a full s3:// URI")
+    raise ValueError(
+        "--bucket is required when --s3-video-path is not a full s3:// URI"
+    )
 
 
 def _resolve_video(args: argparse.Namespace) -> tuple[str, str]:
@@ -228,7 +269,11 @@ def _resolve_video(args: argparse.Namespace) -> tuple[str, str]:
 
     bucket = _resolve_bucket(args.s3_video_path, args.bucket)
     parsed = urlparse(args.s3_video_path)
-    key = parsed.path.lstrip("/") if parsed.scheme == "s3" else args.s3_video_path.strip("/")
+    key = (
+        parsed.path.lstrip("/")
+        if parsed.scheme == "s3"
+        else args.s3_video_path.strip("/")
+    )
     prefix = f"{input_prefix}/" if input_prefix else ""
     if prefix and key.startswith(prefix):
         key = key[len(prefix) :]
@@ -319,17 +364,13 @@ def build_document(args: argparse.Namespace) -> dict[str, Any]:
             "--sns-topic-name and --notification-email must be provided together"
         )
     if email_enabled and not args.notification_email:
-        raise ValueError(
-            "--email requires --sns-topic-name and --notification-email"
-        )
+        raise ValueError("--email requires --sns-topic-name and --notification-email")
     if not email_enabled and (args.sns_topic_name or args.notification_email):
         raise ValueError(
             "--no-email cannot be combined with --sns-topic-name or --notification-email"
         )
     telegram_enabled = (
-        args.telegram
-        if args.telegram is not None
-        else bool(args.telegram_chat_id)
+        args.telegram if args.telegram is not None else bool(args.telegram_chat_id)
     )
     if telegram_enabled and not args.telegram_chat_id:
         raise ValueError("--telegram requires --telegram-chat-id")
@@ -370,9 +411,20 @@ def build_document(args: argparse.Namespace) -> dict[str, Any]:
                 },
             },
             "reconstruction": {
-                "enabled": False,
+                "enabled": args.reconstruction,
                 "type": "nerfstudio_splatfacto",
-                "config": {},
+                "config": {
+                    "nerfstudio_bin": str(args.nerfstudio_bin),
+                    "frames": args.reconstruction_frames,
+                    **asdict(
+                        TrainingProfile(
+                            **{
+                                name: getattr(args, "splatfacto_" + name)
+                                for name in TrainingProfile.__dataclass_fields__
+                            }
+                        )
+                    ),
+                },
             },
         },
         "artifacts": {
@@ -380,8 +432,7 @@ def build_document(args: argparse.Namespace) -> dict[str, Any]:
                 "nerfstudio": {
                     "enabled": args.nerfstudio,
                     "source_experiment_name": (
-                        args.nerfstudio_source_experiment_name
-                        or args.experiment_name
+                        args.nerfstudio_source_experiment_name or args.experiment_name
                     ),
                     "frames": (
                         [args.frame]
@@ -399,15 +450,21 @@ def build_document(args: argparse.Namespace) -> dict[str, Any]:
                     "view_count": args.rerun_view_count,
                     "device": args.rerun_device,
                     "replace_existing": args.rerun_replace_existing,
-                }
+                },
             },
             "reconstruction": {
                 "rerun": {
-                    "enabled": False,
+                    "enabled": args.reconstruction_rerun,
                     "source_experiment_name": args.experiment_name,
-                    "view_count": 4,
+                    "view_count": args.reconstruction_rerun_view_count,
                     "device": "auto",
                     "replace_existing": False,
+                    "max_splats": args.reconstruction_rerun_max_splats,
+                    "python": (
+                        str(args.reconstruction_rerun_python)
+                        if args.reconstruction_rerun_python
+                        else None
+                    ),
                 }
             },
         },
@@ -464,7 +521,9 @@ def build_document(args: argparse.Namespace) -> dict[str, Any]:
 
 def write_document(document: dict[str, Any], output: Path, force: bool = False) -> None:
     if output.exists() and not force:
-        raise FileExistsError(f"output already exists (use --force to replace it): {output}")
+        raise FileExistsError(
+            f"output already exists (use --force to replace it): {output}"
+        )
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = output.with_suffix(output.suffix + ".tmp")
     temporary.write_text(json.dumps(document, indent=2) + "\n")

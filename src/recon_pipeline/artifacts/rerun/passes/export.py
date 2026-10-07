@@ -56,6 +56,7 @@ class RerunExportPass:
             ],
             context,
             runner=self.runner,
+            python=self.config.python,
         )
         return PassResult(
             artifacts={RERUN_RECORDING: Path(result["path"])}, details=result

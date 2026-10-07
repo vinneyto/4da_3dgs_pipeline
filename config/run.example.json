@@ -1,18 +1,5 @@
 {
-  "schema_version": 6,
-  "environment": {
-    "conda_bootstrap": "/opt/conda/etc/profile.d/conda.sh",
-    "conda_env": "/home/sagemaker-user/.conda/envs/4danyone",
-    "pipeline_repo_root": "/home/sagemaker-user/work/4da_3dgs_pipeline",
-    "fourdanyone_git_url": "https://github.com/ant-research/4DAnyone.git",
-    "fourdanyone_git_ref": "e38f210827f7b3effbe5b573ea07cfcf17e72dca",
-    "python_version": "3.11",
-    "torch_version": "2.8.0",
-    "torchvision_version": "0.23.0",
-    "torch_index_url": "https://download.pytorch.org/whl/cu126",
-    "opencv_fallback_version": "4.14.0.94",
-    "lock_file": "/home/sagemaker-user/4danyone-data/environment/requirements-lock.txt"
-  },
+  "schema_version": 7,
   "experiment_name": "leo_one_layer_24views_01",
   "pipeline": {
     "dataset": {
@@ -36,7 +23,6 @@
       "enabled": false,
       "type": "nerfstudio_splatfacto",
       "config": {
-        "nerfstudio_bin": "/home/sagemaker-user/.conda/envs/splatfacto/bin",
         "frames": null,
         "max_num_iterations": 60000,
         "stop_split_at": 32000,
@@ -82,7 +68,6 @@
         "view_count": 4,
         "device": "auto",
         "replace_existing": false,
-        "python": "/home/sagemaker-user/.conda/envs/splatfacto-rerun/bin/python",
         "max_splats": 100000
       }
     }
@@ -114,10 +99,6 @@
       "domain_id": "d-REPLACE_ME",
       "space_name": "cp-4da-jupyter-REPLACE_WITH_DEPLOYMENT_ID",
       "app_name": "default"
-    },
-    "local": {
-      "data_root": "/home/sagemaker-user/4danyone-data",
-      "fourdanyone_root": "/home/sagemaker-user/work/4DAnyone"
     }
   }
 }

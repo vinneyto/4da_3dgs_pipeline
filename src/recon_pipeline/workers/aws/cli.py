@@ -10,6 +10,7 @@ from pathlib import Path
 
 from .aws import configure_email
 from .config import AwsWorkerConfig, load_aws_worker_config, load_document
+from recon_pipeline.run_document import strip_environment
 from .job import AwsBackgroundJob
 from .pipeline import build_aws_pipeline
 from .status import JobStatus
@@ -117,7 +118,7 @@ def main() -> None:
     job, config = _job_from_config(args.config)
     if args.command == "start":
         load_aws_worker_config(args.config)
-        document = load_document(args.config)
+        document = strip_environment(load_document(args.config))
         request = {
             "schema_version": document["schema_version"],
             "experiment_name": document.get("experiment_name"),

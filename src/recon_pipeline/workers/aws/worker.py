@@ -8,6 +8,7 @@ import os
 import traceback
 from pathlib import Path
 
+from recon_pipeline.environment import PipelineEnvironment
 from recon_pipeline.core import PipelineContext, PipelineFinalizationError
 
 from .config import AwsWorkerConfig, materialize_pipeline_config
@@ -17,8 +18,9 @@ from .status import JobStatus, utc_now
 
 def run_worker(job_dir: Path) -> int:
     request = json.loads((job_dir / "request.json").read_text())
-    worker = AwsWorkerConfig.from_dict(request["aws_worker"])
-    config = materialize_pipeline_config(request, worker)
+    environment = PipelineEnvironment.from_environ()
+    worker = AwsWorkerConfig.from_document(request, environment)
+    config = materialize_pipeline_config(request, worker, environment)
     status_path = job_dir / "status.json"
     status = JobStatus.read(status_path)
     status.update(pid=os.getpid())

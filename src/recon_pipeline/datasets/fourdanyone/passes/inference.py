@@ -64,6 +64,7 @@ class FourDAnyoneInferencePass:
             self.arguments(),
             context,
             runner=self.runner,
+            python=self.config.python,
         )
         return PassResult(
             artifacts={

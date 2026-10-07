@@ -6,6 +6,8 @@ import pytest
 from recon_pipeline.workers.aws.config import load_aws_worker_config
 from recon_pipeline.workers.aws.config_cli import main
 
+pytestmark = pytest.mark.usefixtures("pipeline_environment")
+
 
 def arguments(output: Path) -> list[str]:
     return [
@@ -35,9 +37,10 @@ def test_generator_writes_a_valid_worker_document(tmp_path: Path) -> None:
 
     raw = json.loads(output.read_text())
     pipeline, worker = load_aws_worker_config(output)
-    assert raw["schema_version"] == 6
-    assert raw["environment"]["python_version"] == "3.11"
-    assert raw["environment"]["torch_version"] == "2.8.0"
+    assert raw["schema_version"] == 7
+    assert "environment" not in raw
+    assert "local" not in raw["aws_worker"]
+    assert "nerfstudio_bin" not in raw["pipeline"]["reconstruction"]["config"]
     assert raw["pipeline"]["dataset"]["enabled"] is True
     assert raw["pipeline"]["dataset"]["type"] == "4danyone"
     assert raw["pipeline"]["dataset"]["config"]["layer_pitches"] == [0]
@@ -63,7 +66,6 @@ def test_generator_writes_a_valid_worker_document(tmp_path: Path) -> None:
             "view_count": 4,
             "device": "auto",
             "replace_existing": False,
-            "python": None,
             "max_splats": 100000,
         }
     }
@@ -76,9 +78,7 @@ def test_generator_writes_a_valid_worker_document(tmp_path: Path) -> None:
     assert worker.bucket.name == "cp-4da-test"
     assert raw["aws_worker"]["sagemaker"]["app_name"] == "default"
     assert raw["aws_worker"]["bucket"]["video"] == "leo.MOV"
-    assert worker.local_video_path == Path(
-        "/home/sagemaker-user/4danyone-data/input/leo.MOV"
-    )
+    assert worker.local_video_path == tmp_path / "data/input/leo.MOV"
 
 
 def test_generator_refuses_to_replace_a_document_without_force(tmp_path: Path) -> None:
@@ -91,7 +91,9 @@ def test_generator_refuses_to_replace_a_document_without_force(tmp_path: Path) -
     assert output.read_text() == "do not replace"
 
 
-def test_generator_enables_reconstruction_and_overrides_profile(tmp_path):
+def test_generator_enables_reconstruction_and_overrides_profile(tmp_path, monkeypatch):
+    monkeypatch.setenv("RECON_NERFSTUDIO_BIN", "/tools/splatfacto/bin")
+    monkeypatch.setenv("RECON_SPLATFACTO_RERUN_PYTHON", "/tools/rerun/bin/python")
     output = tmp_path / "run.json"
     main(
         [
@@ -102,15 +104,11 @@ def test_generator_enables_reconstruction_and_overrides_profile(tmp_path):
             "--reconstruction",
             "--reconstruction-frames",
             "60",
-            "--nerfstudio-bin",
-            "/tools/splatfacto/bin",
             "--splatfacto-max-num-iterations",
             "500",
             "--splatfacto-sh-degree",
             "1",
             "--reconstruction-rerun",
-            "--reconstruction-rerun-python",
-            "/tools/rerun/bin/python",
         ]
     )
     pipeline, _ = load_aws_worker_config(output)
@@ -173,7 +171,7 @@ def test_generator_clones_template_with_new_identity_and_video(tmp_path: Path) -
     assert cloned["aws_worker"]["bucket"]["video"] == "alex.MOV"
     assert cloned["aws_worker"]["bucket"]["name"] == "cp-4da-test"
     assert cloned["pipeline"] == source["pipeline"]
-    assert cloned["environment"] == source["environment"]
+    assert "environment" not in cloned
     assert (
         cloned["aws_worker"]["notifications"] == source["aws_worker"]["notifications"]
     )

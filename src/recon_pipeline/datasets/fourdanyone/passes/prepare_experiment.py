@@ -30,7 +30,7 @@ class PrepareExperimentPass:
                 "--settings-output",
                 str(self.config.experiment_dir / "pipeline-config.json"),
                 "--settings",
-                json.dumps(self.config.to_dict()),
+                json.dumps(self.config.settings_dict()),
             ],
             context,
             runner=self.runner,

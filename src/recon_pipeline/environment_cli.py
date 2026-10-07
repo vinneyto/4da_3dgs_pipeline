@@ -121,6 +121,14 @@ def configure(env_file: Path, repo: Path) -> None:
     lines.extend(
         [
             f"export CUDA_HOME={shlex.quote(cuda_home)}",
+            "# Conda CUDA headers live under targets; gsplat also compiles C++ sources.",
+            'if [ -f "$CUDA_HOME/targets/x86_64-linux/include/cuda_runtime_api.h" ]; then',
+            '  case ":${CPATH:-}:" in',
+            '    *":$CUDA_HOME/targets/x86_64-linux/include:"*) ;;',
+            '    *) CPATH="$CUDA_HOME/targets/x86_64-linux/include${CPATH:+:$CPATH}" ;;',
+            "  esac",
+            "  export CPATH",
+            "fi",
             "export PATH="
             + shlex.quote(str(environment.python.parent))
             + ":"

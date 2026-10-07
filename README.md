@@ -127,7 +127,12 @@ standalone instructions, is accepted as an alias for `RECON_NERFSTUDIO_BIN`.
 | Nerfstudio, gsplat, CUDA toolkit versions | `RECON_NERFSTUDIO_VERSION`, `RECON_GSPLAT_VERSION`, `RECON_CUDA_VERSION` |
 
 The setup file also sets `PATH`, `CUDA_HOME`, `CXX` and `LD_LIBRARY_PATH` for the
-installed tools. Run JSON schema v7 contains only pipeline/artifact settings and
+installed tools. When Conda CUDA headers exist under
+`$CUDA_HOME/targets/x86_64-linux/include`, it also prepends that directory to
+`CPATH` for gsplat's C++ compilation, preserving existing entries without
+duplicating the directory on repeated sourcing. Use `--configure-only` followed
+by sourcing the env file to refresh these settings without reinstalling.
+Run JSON schema v7 contains only pipeline/artifact settings and
 high-level AWS settings (bucket, region, prefixes, notifications, SageMaker).
 It rejects `environment`, `aws_worker.local`, `nerfstudio_bin`, interpreter and
 workspace paths. Local inputs use `pipeline.dataset.config.video`, relative to

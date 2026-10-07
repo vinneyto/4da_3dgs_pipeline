@@ -536,3 +536,50 @@ def test_checker_reports_missing_open3d_native_library(pipeline_environment):
     check = next(c for c in report["checks"] if c["check"] == "Splatfacto Open3D")
     assert check["status"] == "FAIL"
     assert "libEGL.so.1" in check["detail"]
+
+
+@pytest.mark.parametrize("existing", [None, "/custom/include", "cuda"])
+def test_configure_exports_conda_cuda_headers_preserving_cpath_without_duplicates(
+    monkeypatch, tmp_path, existing
+):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    toolkit = tmp_path / "cuda toolkit"
+    include = toolkit / "targets/x86_64-linux/include"
+    include.mkdir(parents=True)
+    (include / "cuda_runtime_api.h").touch()
+    monkeypatch.setenv("CUDA_HOME", str(toolkit))
+    if existing is None:
+        monkeypatch.delenv("CPATH", raising=False)
+    else:
+        monkeypatch.setenv("CPATH", str(include) if existing == "cuda" else existing)
+    env_file = tmp_path / "environment.sh"
+    configure(env_file, ROOT)
+    completed = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'set -u\nsource "$1"\nsource "$1"\nprintenv CPATH',
+            "test",
+            str(env_file),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+    expected = str(include) + (":" + existing if existing not in (None, "cuda") else "")
+    assert completed.stdout.strip() == expected
+
+
+def test_configure_does_not_add_nonexistent_cuda_header_path(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("CUDA_HOME", str(tmp_path / "absent-toolkit"))
+    monkeypatch.setenv("CPATH", "/custom/include")
+    env_file = tmp_path / "environment.sh"
+    configure(env_file, ROOT)
+    completed = subprocess.run(
+        ["bash", "-c", 'set -u\nsource "$1"\nprintenv CPATH', "test", str(env_file)],
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "/custom/include"

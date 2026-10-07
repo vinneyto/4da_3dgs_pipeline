@@ -63,7 +63,10 @@ if [[ ! -f "$RECON_CONDA_BOOTSTRAP" ]]; then
   INSTALLER=""
 fi
 stage "Conda initialization"
+# Conda and its activation hooks access optional unset variables.
+set +u
 source "$RECON_CONDA_BOOTSTRAP"
+set -u
 stage "Workspace directories"
 for directory in input models runs jobs environment; do
   mkdir -p "$RECON_DATA_ROOT/$directory"
@@ -93,7 +96,9 @@ stage "Splatfacto CUDA toolkit and C++ compiler"
 conda install --prefix "$SPLATFACTO_ENV" -y -c conda-forge -c nvidia \
   "cuda-toolkit=$RECON_CUDA_VERSION" gxx_linux-64=11 ninja
 stage "Splatfacto Conda activation"
+set +u
 conda activate "$SPLATFACTO_ENV"
+set -u
 export CUDA_HOME="$SPLATFACTO_ENV"
 export LD_LIBRARY_PATH="$CUDA_HOME/lib:${LD_LIBRARY_PATH:-}"
 NS_PYTHON="$RECON_NERFSTUDIO_BIN/python"

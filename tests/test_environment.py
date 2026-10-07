@@ -447,3 +447,54 @@ def test_cuda_probe_reports_missing_torch_without_traceback():
     assert completed.returncode == 1
     assert "CUDA check unavailable: No module named 'torch'" in completed.stdout
     assert not completed.stderr
+
+
+@pytest.mark.parametrize("activation_status", [0, 56])
+def test_setup_conda_hooks_allow_unset_variables_but_preserve_failures(
+    pipeline_environment, monkeypatch, tmp_path, activation_status
+):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("RECON_ENV_FILE", str(tmp_path / "env.sh"))
+    monkeypatch.delenv("ADDR2LINE", raising=False)
+    bootstrap = tmp_path / "conda.sh"
+    bootstrap.write_text(
+        'printf "bootstrap optional=%s\\n" "$ADDR2LINE"\n'
+        "conda() {\n"
+        '  if [[ "$1" == activate ]]; then\n'
+        '    printf "activation optional=%s\\n" "$ADDR2LINE"\n'
+        f"    return {activation_status}\n"
+        "  fi\n"
+        "  return 0\n"
+        "}\n"
+    )
+    monkeypatch.setenv("RECON_CONDA_BOOTSTRAP", str(bootstrap))
+    worker = pipeline_environment.python
+    worker.parent.mkdir(parents=True)
+    worker.write_text("#!/bin/bash\nexit 0\n")
+    worker.chmod(0o755)
+    ns_python = pipeline_environment.nerfstudio_bin / "python"
+    ns_python.parent.mkdir(parents=True)
+    # Stop before downloads; reaching packaging proves activation succeeded.
+    ns_python.write_text("#!/bin/bash\nexit 73\n")
+    ns_python.chmod(0o755)
+    log_file = tmp_path / "setup.log"
+    completed = subprocess.run(
+        [
+            str(ROOT / "scripts/setup_environment.sh"),
+            "--reuse-4danyone",
+            "--log-file",
+            str(log_file),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    log = log_file.read_text()
+    assert "activation optional=" in log
+    assert "unbound variable" not in log
+    assert completed.returncode == (activation_status or 73)
+    failed_stage = (
+        "Splatfacto Conda activation"
+        if activation_status
+        else "Splatfacto Python packaging tools"
+    )
+    assert f'setup stopped at "{failed_stage}"' in log

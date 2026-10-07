@@ -36,8 +36,11 @@ fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
 [[ -x "$CONDA_ENV/bin/python" ]] || fail "Conda environment not found: $CONDA_ENV"
 
 # shellcheck disable=SC1090
+# Conda and its activation hooks access optional unset variables.
+set +u
 source "$CONDA_BOOTSTRAP"
 conda activate "$CONDA_ENV"
+set -u
 mkdir -p "$MODEL_DIR"
 cd "$FOURDANYONE_ROOT"
 

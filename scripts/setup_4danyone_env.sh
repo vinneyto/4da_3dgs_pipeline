@@ -43,7 +43,10 @@ if [[ "$current_ref" != "$FOURDANYONE_GIT_REF" ]]; then
 fi
 
 # shellcheck disable=SC1090
+# Conda and its activation hooks access optional unset variables.
+set +u
 source "$CONDA_BOOTSTRAP"
+set -u
 if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; then
   EXPECT_CUDA=1
   log "GPU instance detected"
@@ -57,7 +60,9 @@ if [[ ! -x "$CONDA_ENV/bin/python" ]]; then
   log "Creating persistent conda environment: $CONDA_ENV"
   conda create --prefix "$CONDA_ENV" "python=$PYTHON_VERSION" pip -y
 fi
+set +u
 conda activate "$CONDA_ENV"
+set -u
 PYTHON="$CONDA_ENV/bin/python"
 
 log "Installing packaging tools and CUDA-enabled PyTorch"

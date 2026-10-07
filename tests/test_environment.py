@@ -320,3 +320,38 @@ def test_configure_does_not_mask_an_existing_login_profile(monkeypatch, tmp_path
     assert not (tmp_path / ".bash_profile").exists()
     assert profile.read_text().startswith("export EXISTING_SETTING=preserved\n")
     assert "Reconstruction pipeline environment" in profile.read_text()
+
+
+def test_checker_reports_detected_cuda_without_unset_version_comparison(
+    monkeypatch, tmp_path
+):
+    toolkit = tmp_path / "existing-cuda"
+    binary = toolkit / "bin/nvcc"
+    binary.parent.mkdir(parents=True)
+    binary.write_text(
+        '#!/bin/sh\necho "Cuda compilation tools, release 12.6, V12.6.85"\n'
+    )
+    binary.chmod(0o755)
+    monkeypatch.setenv("CUDA_HOME", str(toolkit))
+    monkeypatch.delenv("RECON_CUDA_VERSION", raising=False)
+    report = check_environment()
+    version = next(c for c in report["checks"] if c["check"] == "CUDA toolkit version")
+    assert version["status"] == "WARN"
+    assert "detected 12.6" in version["detail"]
+    assert "comparison skipped" in version["detail"]
+    monkeypatch.setenv("RECON_CUDA_VERSION", "12.1.1")
+    report = check_environment()
+    version = next(c for c in report["checks"] if c["check"] == "CUDA toolkit version")
+    assert version["status"] == "FAIL"
+    assert version["detail"] == "detected 12.6, expected 12.1.1"
+
+
+def test_configure_only_preserves_existing_cuda_toolkit(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("CUDA_HOME", "/opt/conda")
+    env_file = tmp_path / "env.sh"
+    configure(env_file, ROOT)
+    assert "export CUDA_HOME=/opt/conda" in env_file.read_text()
+    monkeypatch.delenv("CUDA_HOME")
+    configure(env_file, ROOT)
+    assert "export CUDA_HOME=/opt/conda" in env_file.read_text()

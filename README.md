@@ -40,6 +40,10 @@ Use `--env-file FILE` (or `RECON_ENV_FILE`) to choose another file and source it
 in the current terminal. Defaults are based on the current user's home and the
 repository location, without a hard-coded SageMaker username.
 
+Configure-only preserves the existing `CUDA_HOME`, or detects a toolkit already
+on `PATH`. The checker prints the detected CUDA version even before
+`RECON_CUDA_VERSION` has been exported.
+
 To fill/persist variables on an existing machine without reinstalling anything:
 
 ```bash

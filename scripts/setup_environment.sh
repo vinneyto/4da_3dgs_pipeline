@@ -75,6 +75,11 @@ fi
 "$RECON_SPLATFACTO_RERUN_PYTHON" -m pip install --editable "$RECON_PIPELINE_ROOT[splatfacto-rerun]"
 "$RECON_SPLATFACTO_RERUN_PYTHON" -m pip freeze > "$RECON_DATA_ROOT/environment/splatfacto-rerun-requirements-lock.txt"
 
+# Full installation selects the newly installed toolkit. Configure-only keeps
+# the existing CUDA_HOME (or the toolkit found on PATH).
+python3 -m recon_pipeline.environment_cli configure --env-file "$ENV_FILE" --repo "$REPO_ROOT"
+source "$ENV_FILE"
+
 if [[ -n "$RUN_CONFIG" ]]; then
   "$SCRIPT_DIR/download_4danyone_models.sh" "$RUN_CONFIG"
 else

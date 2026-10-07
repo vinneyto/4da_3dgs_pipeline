@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -27,7 +28,7 @@ def configure(env_file: Path, repo: Path) -> None:
             parts = shlex.split(line)
             if len(parts) == 2 and parts[0] == "export" and "=" in parts[1]:
                 name, value = parts[1].split("=", 1)
-                if name in INSTALL_DEFAULTS:
+                if name in INSTALL_DEFAULTS or name == "CUDA_HOME":
                     saved[name] = value
     # Shell exports win over the last installation file, including the old alias.
     values = {**saved, **environment_values(os.environ)}
@@ -54,7 +55,14 @@ def configure(env_file: Path, repo: Path) -> None:
     lines.extend(
         f"export {name}={shlex.quote(values[name])}" for name in INSTALL_DEFAULTS
     )
-    cuda_home = str(environment.nerfstudio_bin.parent)
+    cuda_home = os.environ.get("CUDA_HOME") or saved.get("CUDA_HOME")
+    if not cuda_home:
+        nvcc = shutil.which("nvcc")
+        cuda_home = (
+            str(Path(nvcc).parent.parent)
+            if nvcc
+            else str(environment.nerfstudio_bin.parent)
+        )
     lines.extend(
         [
             f"export CUDA_HOME={shlex.quote(cuda_home)}",
@@ -115,10 +123,10 @@ def check_environment(*, require_cuda: bool = False) -> dict:
             completed = subprocess.run(
                 command, capture_output=True, text=True, timeout=20
             )
-            detail = (
-                completed.stdout.strip()
-                if completed.returncode == 0
-                else completed.stderr.strip()
+            detail = "\n".join(
+                part
+                for part in (completed.stdout.strip(), completed.stderr.strip())
+                if part
             )[-2000:]
             record(
                 name,
@@ -318,18 +326,34 @@ def check_environment(*, require_cuda: bool = False) -> dict:
     )
     cxx = os.environ.get("CXX") or shutil.which("c++")
     if nvcc and executable(nvcc):
-        probe(
-            "CUDA toolkit version",
-            [
-                "python3",
-                "-c",
-                "import re,subprocess,sys; output=subprocess.check_output([sys.argv[1],'-V'],text=True); "
-                "match=re.search(r'release (\\d+\\.\\d+)',output); expected='.'.join(sys.argv[2].split('.')[:2]); "
-                "print(output.strip()); sys.exit(0 if match and match[1]==expected else 1)",
-                str(nvcc),
-                values.get("RECON_CUDA_VERSION", ""),
-            ],
-        )
+        try:
+            completed = subprocess.run(
+                [str(nvcc), "--version"], capture_output=True, text=True, timeout=5
+            )
+            match = re.search(r"release (\d+\.\d+)", completed.stdout)
+            expected = values.get("RECON_CUDA_VERSION", "")
+            if completed.returncode or not match:
+                record(
+                    "CUDA toolkit version",
+                    False,
+                    (completed.stdout + completed.stderr).strip()
+                    or "could not read nvcc version",
+                )
+            elif not expected:
+                record(
+                    "CUDA toolkit version",
+                    False,
+                    f"detected {match[1]}; comparison skipped: RECON_CUDA_VERSION not exported",
+                    warning=True,
+                )
+            else:
+                record(
+                    "CUDA toolkit version",
+                    match[1] == ".".join(expected.split(".")[:2]),
+                    f"detected {match[1]}, expected {expected}",
+                )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            record("CUDA toolkit version", False, error)
     record(
         "C++ compiler",
         bool(cxx and (shutil.which(cxx) or executable(Path(cxx)))),

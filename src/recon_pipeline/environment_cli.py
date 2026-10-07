@@ -20,6 +20,50 @@ from .environment import (
     environment_values,
 )
 
+PACKAGE_PROBE = """
+import importlib.util
+import importlib.metadata as metadata
+import json
+import sys
+
+pins, modules = json.loads(sys.argv[1]), json.loads(sys.argv[2])
+python_version = sys.version.split()[0]
+python_ok = (not sys.argv[3] or python_version == sys.argv[3]
+             or python_version.startswith(sys.argv[3] + '.'))
+missing_modules = [name for name in modules if importlib.util.find_spec(name) is None]
+versions, missing_distributions = {}, []
+for name in pins:
+    try:
+        versions[name] = metadata.version(name)
+    except metadata.PackageNotFoundError:
+        versions[name] = None
+        missing_distributions.append(name)
+mismatched = [name for name, expected in pins.items()
+              if expected and versions[name] is not None
+              and not (versions[name].split('+')[0] == expected
+                       or (name == 'rerun-sdk' and versions[name].startswith(expected + '.')))]
+missing = sorted(set(missing_modules + missing_distributions))
+print(json.dumps({'python': python_version, 'versions': versions, 'missing': missing,
+                  'mismatched': mismatched, 'python_matches': python_ok}))
+sys.exit(bool(missing or mismatched or not python_ok))
+"""
+
+CUDA_PROBE = """
+import sys
+try:
+    import torch
+    available = torch.cuda.is_available()
+    print('torch=' + torch.__version__ + ' CUDA build=' + str(torch.version.cuda)
+          + ' available=' + str(available))
+    if available:
+        print(torch.cuda.get_device_name(0))
+        torch.empty(1, device='cuda')
+except Exception as error:
+    print('CUDA check unavailable: ' + str(error))
+    sys.exit(1)
+sys.exit(0 if available else 2)
+"""
+
 
 def configure(env_file: Path, repo: Path) -> None:
     saved = {}
@@ -271,23 +315,12 @@ def check_environment(*, require_cuda: bool = False) -> dict:
         record(name + " Python", executable(python), python)
         if not executable(python):
             continue
-        code = (
-            "import importlib.util,importlib.metadata as m,sys,json; "
-            "pins=json.loads(sys.argv[1]); modules=json.loads(sys.argv[2]); "
-            "python_ok=not sys.argv[3] or sys.version.split()[0]==sys.argv[3] or sys.version.split()[0].startswith(sys.argv[3]+'.'); "
-            "missing=[n for n in modules if importlib.util.find_spec(n) is None]; "
-            "versions={n:m.version(n) for n in pins}; "
-            "bad=[n for n,v in pins.items() if v and not "
-            "(versions[n].split('+')[0] == v or (n=='rerun-sdk' and versions[n].startswith(v+'.')))]; "
-            "print(json.dumps({'python':sys.version.split()[0], 'versions':versions, 'missing':missing, 'mismatched':bad, 'python_matches':python_ok})); "
-            "sys.exit(bool(missing or bad or not python_ok))"
-        )
         probe(
             name + " packages",
             [
                 str(python),
                 "-c",
-                code,
+                PACKAGE_PROBE,
                 json.dumps(pins),
                 json.dumps(modules),
                 values.get("RECON_PYTHON_VERSION", ""),
@@ -300,10 +333,7 @@ def check_environment(*, require_cuda: bool = False) -> dict:
                 [
                     str(python),
                     "-c",
-                    "import torch,sys; available=torch.cuda.is_available(); "
-                    "print('torch='+torch.__version__+' CUDA build='+str(torch.version.cuda)+' available='+str(available)); "
-                    "print(torch.cuda.get_device_name(0)) if available else None; "
-                    "torch.empty(1,device='cuda') if available else None; sys.exit(0 if available else 2)",
+                    CUDA_PROBE,
                 ],
                 warning=not require_cuda,
             )

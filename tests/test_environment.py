@@ -381,8 +381,14 @@ def test_reuse_setup_only_adds_worker_dependencies_before_new_environments(
             'if [[ "$*" == *"pip freeze"* ]]; then echo fixture==1; fi\n'
         )
         python.chmod(0o755)
+    setup_log = tmp_path / "setup.log"
     completed = subprocess.run(
-        [str(ROOT / "scripts/setup_environment.sh"), "--reuse-4danyone"],
+        [
+            str(ROOT / "scripts/setup_environment.sh"),
+            "--reuse-4danyone",
+            "--log-file",
+            str(setup_log),
+        ],
         capture_output=True,
         text=True,
     )
@@ -394,7 +400,50 @@ def test_reuse_setup_only_adds_worker_dependencies_before_new_environments(
             "-m pip freeze",
         ]
         assert pipeline_environment.lock_file.read_text() == "fixture==1\n"
+        assert (
+            'setup stopped at "Splatfacto Conda environment creation" (exit 55)'
+            in setup_log.read_text()
+        )
     else:
         assert completed.returncode == 1
-        assert "Cannot reuse 4DAnyone" in completed.stderr
+        assert "Cannot reuse 4DAnyone" in setup_log.read_text()
+        assert (
+            'setup stopped at "4DAnyone worker dependencies (reuse existing environment)" (exit 1)'
+            in setup_log.read_text()
+        )
         assert not trace.exists()
+
+
+def test_package_probe_reports_empty_environment_without_traceback():
+    from recon_pipeline.environment_cli import PACKAGE_PROBE
+
+    names = ["torch", "torchvision", "nerfstudio"]
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-S",
+            "-c",
+            PACKAGE_PROBE,
+            json.dumps(dict.fromkeys(names, "")),
+            json.dumps(names),
+            "",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 1
+    report = json.loads(completed.stdout)
+    assert report["missing"] == sorted(names)
+    assert report["versions"] == dict.fromkeys(names)
+    assert not completed.stderr
+
+
+def test_cuda_probe_reports_missing_torch_without_traceback():
+    from recon_pipeline.environment_cli import CUDA_PROBE
+
+    completed = subprocess.run(
+        [sys.executable, "-S", "-c", CUDA_PROBE], capture_output=True, text=True
+    )
+    assert completed.returncode == 1
+    assert "CUDA check unavailable: No module named 'torch'" in completed.stdout
+    assert not completed.stderr

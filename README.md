@@ -71,6 +71,20 @@ writes the package lock and installs Splatfacto and its Rerun environment. It
 skips the 4DAnyone repository setup, requirements and PyTorch installation. Full
 installation selects and persists the Splatfacto toolkit in `CUDA_HOME`.
 
+Installation writes its complete output to a timestamped `environment-setup-*.log`
+in the pipeline checkout. Each stage is labeled; a failure prints the stage,
+exit status and log path. Use `--log-file FILE` to choose a path. To diagnose a
+partially installed machine, rerun setup and share the end of that log:
+
+```bash
+./scripts/setup_environment.sh --reuse-4danyone --log-file environment-setup.log
+tail -n 100 environment-setup.log
+```
+
+Existing Conda prefixes are reused. The checker reports missing packages even
+when an environment contains only Python; its output does not contain the
+installer's failure reason. Configure-only does not create an installation log.
+
 ## Environment boundary
 
 `PipelineEnvironment` (`src/recon_pipeline/environment.py`) reads machine

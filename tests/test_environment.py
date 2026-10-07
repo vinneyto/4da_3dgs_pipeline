@@ -491,7 +491,7 @@ def test_setup_conda_hooks_allow_unset_variables_but_preserve_failures(
     )
     log = log_file.read_text()
     assert "activation optional=" in log
-    assert "-c conda-forge libegl libgl" in log
+    assert "-c conda-forge libegl libgl libusb" in log
     assert "unbound variable" not in log
     assert completed.returncode == (activation_status or 73)
     failed_stage = (

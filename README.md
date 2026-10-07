@@ -528,6 +528,39 @@ recon-aws-worker plan --config "$RECON_RUN_CONFIG"
 
 ## Run in the background
 
+For a sequential queue, repeat `--config` in execution order:
+
+```bash
+recon-aws-worker start \
+  --config config/experiment-1.json \
+  --config config/experiment-2.json \
+  --config config/experiment-3.json \
+  --queue-id splatfacto-batch \
+  --shutdown-on always
+
+recon-aws-worker logs --queue-id splatfacto-batch --follow
+recon-aws-worker status --queue-id splatfacto-batch --json
+recon-aws-worker stop --queue-id splatfacto-batch
+```
+
+Each experiment finishes before the next starts. Failed experiments are recorded
+and the queue continues. Per-experiment shutdown is disabled; the queue's policy
+is applied only after all experiments finish. `always` stops the App regardless
+of failures; `never` leaves it running; `success` requires all runs to succeed;
+`failure` stops it if any run fails. If omitted, the queue uses the final config's
+policy. For a single config, `--shutdown-on` overrides that run's policy.
+Input JSON files are never modified.
+
+Queue configs must have distinct experiment/job IDs and target the same
+SageMaker App and region. An omitted queue ID defaults to `queue-<first job ID>`.
+Each experiment retains its own job status, log and reconstruction checkpoints.
+The queue has a combined live log and a `queue-result.json` summary under
+`$RECON_DATA_ROOT/jobs/<queue-id>/`. Any failed experiment makes the final queue
+status `failed`, even though later experiments still run. Restart the same queue
+without `--force` to reuse completed pass checkpoints. `stop --queue-id` cancels
+the current experiment and prevents remaining experiments from starting; it
+does not apply the automatic shutdown policy.
+
 ```bash
 recon-aws-worker start --config "$RECON_RUN_CONFIG"
 recon-aws-worker status --config "$RECON_RUN_CONFIG"

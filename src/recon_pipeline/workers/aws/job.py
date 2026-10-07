@@ -50,21 +50,36 @@ class AwsBackgroundJob:
             return True
         return True
 
-    def start(self, request: dict[str, Any]) -> JobStatus:
+    def prepare(self, request: dict[str, Any]) -> JobStatus:
+        """Persist a new attempt before launching its process."""
         if self.status_path.is_file():
             existing = JobStatus.read(self.status_path)
             if not existing.terminal and self._process_is_running(existing.pid):
-                raise RuntimeError(f"job already exists and is {existing.state}: {self.job_id}")
+                raise RuntimeError(
+                    f"job already exists and is {existing.state}: {self.job_id}"
+                )
             self._archive_previous_attempt()
 
         self.root.mkdir(parents=True, exist_ok=True)
-        self.request_path.write_text(json.dumps(request, indent=2, sort_keys=True) + "\n")
+        self.request_path.write_text(
+            json.dumps(request, indent=2, sort_keys=True) + "\n"
+        )
         status = JobStatus(job_id=self.job_id)
         status.write(self.status_path)
+        return status
+
+    def start(self, request: dict[str, Any]) -> JobStatus:
+        self.prepare(request)
 
         log_handle = self.log_path.open("ab", buffering=0)
         process = subprocess.Popen(
-            [sys.executable, "-m", "recon_pipeline.workers.aws.worker", "--job-dir", str(self.root)],
+            [
+                sys.executable,
+                "-m",
+                "recon_pipeline.workers.aws.worker",
+                "--job-dir",
+                str(self.root),
+            ],
             stdin=subprocess.DEVNULL,
             stdout=log_handle,
             stderr=subprocess.STDOUT,

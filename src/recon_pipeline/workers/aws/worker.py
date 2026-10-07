@@ -18,6 +18,10 @@ from .status import JobStatus, utc_now
 
 def run_worker(job_dir: Path) -> int:
     request = json.loads((job_dir / "request.json").read_text())
+    if request.get("kind") == "queue":
+        from .queue import run_queue
+
+        return run_queue(job_dir, request)
     environment = PipelineEnvironment.from_environ()
     worker = AwsWorkerConfig.from_document(request, environment)
     config = materialize_pipeline_config(request, worker, environment)

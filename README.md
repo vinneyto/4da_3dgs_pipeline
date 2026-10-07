@@ -57,6 +57,20 @@ custom paths; export those explicitly first. Full setup is for Linux x86_64.
 Tool installation can run without `--config`; in that case model download is a
 separate step and the final checker reports any missing assets.
 
+If the checker confirms that 4DAnyone already runs with CUDA and model assets
+are present, reuse that environment while installing the missing tools:
+
+```bash
+./scripts/setup_environment.sh --reuse-4danyone
+source "$HOME/.config/recon-pipeline/environment.sh"
+./scripts/check_environment.sh --require-cuda
+```
+
+This mode installs the pipeline's AWS/Rerun worker extras (including `telebot`),
+writes the package lock and installs Splatfacto and its Rerun environment. It
+skips the 4DAnyone repository setup, requirements and PyTorch installation. Full
+installation selects and persists the Splatfacto toolkit in `CUDA_HOME`.
+
 ## Environment boundary
 
 `PipelineEnvironment` (`src/recon_pipeline/environment.py`) reads machine

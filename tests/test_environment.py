@@ -355,3 +355,46 @@ def test_configure_only_preserves_existing_cuda_toolkit(monkeypatch, tmp_path):
     monkeypatch.delenv("CUDA_HOME")
     configure(env_file, ROOT)
     assert "export CUDA_HOME=/opt/conda" in env_file.read_text()
+
+
+@pytest.mark.parametrize("python_exists", [False, True])
+def test_reuse_setup_only_adds_worker_dependencies_before_new_environments(
+    pipeline_environment,
+    monkeypatch,
+    tmp_path,
+    python_exists,
+):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("RECON_ENV_FILE", str(tmp_path / "env.sh"))
+    bootstrap = tmp_path / "conda.sh"
+    # Stop deliberately at the first new-environment Conda operation. No actual
+    # Conda, package downloads or GPU installation run in this test.
+    bootstrap.write_text("conda() { return 55; }\n")
+    monkeypatch.setenv("RECON_CONDA_BOOTSTRAP", str(bootstrap))
+    trace = tmp_path / "worker-calls.txt"
+    monkeypatch.setenv("REUSE_TEST_LOG", str(trace))
+    if python_exists:
+        python = pipeline_environment.python
+        python.parent.mkdir(parents=True)
+        python.write_text(
+            '#!/bin/bash\nprintf "%s\\n" "$*" >> "$REUSE_TEST_LOG"\n'
+            'if [[ "$*" == *"pip freeze"* ]]; then echo fixture==1; fi\n'
+        )
+        python.chmod(0o755)
+    completed = subprocess.run(
+        [str(ROOT / "scripts/setup_environment.sh"), "--reuse-4danyone"],
+        capture_output=True,
+        text=True,
+    )
+    if python_exists:
+        assert completed.returncode == 55, completed.stdout + completed.stderr
+        calls = trace.read_text().splitlines()
+        assert calls == [
+            f"-m pip install --editable {ROOT}[aws,rerun]",
+            "-m pip freeze",
+        ]
+        assert pipeline_environment.lock_file.read_text() == "fixture==1\n"
+    else:
+        assert completed.returncode == 1
+        assert "Cannot reuse 4DAnyone" in completed.stderr
+        assert not trace.exists()

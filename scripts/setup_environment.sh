@@ -5,13 +5,15 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 ENV_FILE="${RECON_ENV_FILE:-$HOME/.config/recon-pipeline/environment.sh}"
 CONFIGURE_ONLY=0
+REUSE_FOURDANYONE=0
 RUN_CONFIG=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --configure-only) CONFIGURE_ONLY=1; shift ;;
+    --reuse-4danyone) REUSE_FOURDANYONE=1; shift ;;
     --config) RUN_CONFIG="${2:?--config requires a run JSON}"; shift 2 ;;
     --env-file) ENV_FILE="${2:?--env-file requires a path}"; shift 2 ;;
-    --help|-h) echo "usage: $0 [--configure-only] [--config RUN.json] [--env-file FILE]"; exit 0 ;;
+    --help|-h) echo "usage: $0 [--configure-only] [--reuse-4danyone] [--config RUN.json] [--env-file FILE]"; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -43,7 +45,18 @@ source "$RECON_CONDA_BOOTSTRAP"
 for directory in input models runs jobs environment; do
   mkdir -p "$RECON_DATA_ROOT/$directory"
 done
-"$SCRIPT_DIR/setup_4danyone_env.sh"
+if [[ "$REUSE_FOURDANYONE" -eq 1 ]]; then
+  WORKER_PYTHON="$RECON_CONDA_ENV/bin/python"
+  [[ -x "$WORKER_PYTHON" ]] || {
+    echo "Cannot reuse 4DAnyone: Python not found at $WORKER_PYTHON" >&2; exit 1;
+  }
+  echo "Reusing existing 4DAnyone; installing worker dependencies only"
+  "$WORKER_PYTHON" -m pip install --editable "$RECON_PIPELINE_ROOT[aws,rerun]"
+  mkdir -p "$(dirname "$RECON_LOCK_FILE")"
+  "$WORKER_PYTHON" -m pip freeze > "$RECON_LOCK_FILE"
+else
+  "$SCRIPT_DIR/setup_4danyone_env.sh"
+fi
 
 SPLATFACTO_ENV="$(dirname "$RECON_NERFSTUDIO_BIN")"
 if [[ ! -x "$RECON_NERFSTUDIO_BIN/python" ]]; then

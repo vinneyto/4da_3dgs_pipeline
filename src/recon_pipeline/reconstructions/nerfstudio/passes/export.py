@@ -55,6 +55,7 @@ class NerfstudioExportPass:
             self.arguments(),
             context,
             runner=self.runner,
+            python=self.config.python,
         )
         return PassResult(
             artifacts={NERFSTUDIO_DATASETS: result["datasets"]},

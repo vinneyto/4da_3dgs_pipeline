@@ -1,8 +1,11 @@
+import pytest
 import json
 from pathlib import Path
 
 from recon_pipeline.workers.aws.config import load_aws_worker_config
 from recon_pipeline.datasets.fourdanyone.config import load_pipeline_config
+
+pytestmark = pytest.mark.usefixtures("pipeline_environment")
 
 
 def document(tmp_path: Path) -> dict:

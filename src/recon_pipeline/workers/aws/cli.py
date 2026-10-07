@@ -13,6 +13,7 @@ from .config import AwsWorkerConfig, load_aws_worker_config, load_document
 from .job import AwsBackgroundJob
 from .pipeline import build_aws_pipeline
 from .status import JobStatus
+from recon_pipeline.environment import PipelineEnvironment
 
 
 def _print_status(status: JobStatus, as_json: bool = False) -> None:
@@ -70,8 +71,27 @@ def build_parser() -> argparse.ArgumentParser:
         ("stop", "Send SIGTERM to the AWS worker process group"),
     ):
         command = commands.add_parser(name, help=help_text)
-        command.add_argument("--config", type=Path, required=True)
+        if name in ("status", "logs", "stop"):
+            target = command.add_mutually_exclusive_group(required=True)
+            target.add_argument("--config", type=Path)
+            target.add_argument("--queue-id")
+        else:
+            command.add_argument(
+                "--config",
+                type=Path,
+                required=True,
+                **({"action": "append"} if name == "start" else {}),
+            )
         if name == "start":
+            command.add_argument(
+                "--queue-id",
+                help="Defaults to queue-<first job ID> for multiple configs",
+            )
+            command.add_argument(
+                "--shutdown-on",
+                choices=("never", "success", "failure", "always"),
+                help="Override shutdown policy for this run; queues apply it only after all configs finish",
+            )
             command.add_argument(
                 "--force",
                 action="store_true",
@@ -85,13 +105,15 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main() -> None:
-    args = build_parser().parse_args()
+def main(argv=None) -> None:
+    args = build_parser().parse_args(argv)
     if args.command == "configure-email":
         _, config = _job_from_config(args.config)
         result = configure_email(config)
         print(json.dumps(result, indent=2, sort_keys=True))
-        print("Confirm the AWS Subscription Confirmation email before relying on notifications.")
+        print(
+            "Confirm the AWS Subscription Confirmation email before relying on notifications."
+        )
         return
 
     if args.command == "plan":
@@ -114,22 +136,23 @@ def main() -> None:
             print(f"finalizer. {finalizer.id} — {finalizer.name}")
         return
 
-    job, config = _job_from_config(args.config)
     if args.command == "start":
-        load_aws_worker_config(args.config)
-        document = load_document(args.config)
-        request = {
-            "schema_version": document["schema_version"],
-            "experiment_name": document.get("experiment_name"),
-            "pipeline": document["pipeline"],
-            "artifacts": document.get("artifacts"),
-            "aws_worker": config.to_dict(),
-            "force": args.force,
-        }
+        from .queue import build_start_request
+
+        job, request = build_start_request(
+            args.config, args.shutdown_on, args.queue_id, args.force
+        )
         status = job.start(request)
         _print_status(status)
         print(f"log:      {job.log_path}")
-    elif args.command == "status":
+        return
+
+    if args.queue_id:
+        environment = PipelineEnvironment.from_environ()
+        job = AwsBackgroundJob(args.queue_id, environment.data_root / "jobs")
+    else:
+        job, _ = _job_from_config(args.config)
+    if args.command == "status":
         _print_status(job.status(), args.json)
     elif args.command == "logs":
         _logs(job, args.lines, args.follow)

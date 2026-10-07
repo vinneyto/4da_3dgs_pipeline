@@ -7,6 +7,11 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from recon_pipeline.environment import PipelineEnvironment
+from recon_pipeline.run_document import (
+    SUPPORTED_SCHEMA_VERSIONS,
+    validate_environment_free,
+)
 from recon_pipeline.reconstructions.nerfstudio.config import NerfstudioArtifactConfig
 from recon_pipeline.artifacts.rerun.config import RerunConfig
 from recon_pipeline.reconstructions.nerfstudio.splatfacto_config import (
@@ -15,7 +20,6 @@ from recon_pipeline.reconstructions.nerfstudio.splatfacto_config import (
 )
 
 DEFAULT_LAYER_PITCHES = (-15, 0, 15)
-SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5, 6})
 FOURDANYONE_DATASET_TYPE = "4danyone"
 
 
@@ -160,11 +164,27 @@ def load_pipeline_config(path: Path) -> "FourDAnyoneConfig":
         payload = document["pipeline"]
     except KeyError as error:
         raise ValueError("config must contain a pipeline object") from error
+    if document["schema_version"] >= 7:
+        validate_environment_free(document)
+    values = extract_4danyone_dataset_config(
+        payload,
+        experiment_name=document.get("experiment_name"),
+        artifacts=document.get("artifacts"),
+    )
+    environment = PipelineEnvironment.from_environ()
+    video = values.get("video")
+    if video is None and values.get("video_path"):
+        video = Path(values["video_path"]).name
+    if not video or Path(video).is_absolute() or ".." in Path(video).parts:
+        raise ValueError(
+            "local dataset.config.video must be relative to RECON_DATA_ROOT/input"
+        )
+    if "turbo" in values:
+        values["enable_turbo"] = values.pop("turbo")
     return FourDAnyoneConfig.from_dict(
-        extract_4danyone_dataset_config(
-            payload,
-            experiment_name=document.get("experiment_name"),
-            artifacts=document.get("artifacts"),
+        environment.materialize(
+            values,
+            environment.data_root / "input" / video,
         )
     )
 
@@ -188,6 +208,7 @@ class FourDAnyoneConfig:
     attention_backend: str = "auto"
     resume: bool = False
     dataset_enabled: bool = True
+    python: str | None = None
     nerfstudio: NerfstudioArtifactConfig = NerfstudioArtifactConfig()
     rerun: RerunConfig = RerunConfig()
     reconstruction: SplatfactoConfig = SplatfactoConfig()
@@ -399,6 +420,22 @@ class FourDAnyoneConfig:
         for key in ("video_path", "fourdanyone_root", "model_dir", "runs_dir"):
             payload[key] = str(payload[key])
         payload["layer_pitches"] = list(self.layer_pitches)
+        return payload
+
+    def settings_dict(self) -> dict[str, Any]:
+        """Portable settings saved alongside the run, without execution paths."""
+        payload = self.to_dict()
+        for name in (
+            "video_path",
+            "fourdanyone_root",
+            "model_dir",
+            "runs_dir",
+            "python",
+        ):
+            payload.pop(name)
+        payload["video"] = self.video_path.name
+        payload["reconstruction"].pop("nerfstudio_bin")
+        payload["reconstruction_rerun"].pop("python")
         return payload
 
     @classmethod

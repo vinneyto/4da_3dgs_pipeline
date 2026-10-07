@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Download and validate model assets using paths and AWS settings from JSON.
+# Download model assets using env paths and high-level AWS settings from JSON.
 # This stage is CPU-safe.
 
 set -Eeuo pipefail
@@ -11,12 +11,13 @@ CONFIG_PATH="$1"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 READ_CONFIG="$SCRIPT_DIR/read_config.py"
-get() { /usr/bin/python3 "$READ_CONFIG" "$CONFIG_PATH" "$1"; }
+get() { python3 "$READ_CONFIG" "$CONFIG_PATH" "$1"; }
 
-CONDA_BOOTSTRAP="$(get environment.conda_bootstrap)"
-CONDA_ENV="$(get environment.conda_env)"
-FOURDANYONE_ROOT="$(get aws_worker.local.fourdanyone_root)"
-DATA_ROOT="$(get aws_worker.local.data_root)"
+env_get() { PYTHONPATH="$SCRIPT_DIR/../src${PYTHONPATH:+:$PYTHONPATH}" python3 -m recon_pipeline.environment_cli value "$1"; }
+CONDA_BOOTSTRAP="$(env_get conda_bootstrap)"
+CONDA_ENV="$(env_get conda_env)"
+FOURDANYONE_ROOT="$(env_get fourdanyone_root)"
+DATA_ROOT="$(env_get data_root)"
 MODEL_DIR="$DATA_ROOT/models"
 AWS_REGION="$(get aws_worker.region)"
 S3_BUCKET="$(get aws_worker.bucket.name 2>/dev/null || get aws_worker.bucket)"
@@ -35,14 +36,20 @@ fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
 [[ -x "$CONDA_ENV/bin/python" ]] || fail "Conda environment not found: $CONDA_ENV"
 
 # shellcheck disable=SC1090
+# Conda and its activation hooks access optional unset variables.
+set +u
 source "$CONDA_BOOTSTRAP"
 conda activate "$CONDA_ENV"
+set -u
 mkdir -p "$MODEL_DIR"
 cd "$FOURDANYONE_ROOT"
 
 log "Synchronizing existing models from S3"
-aws s3 sync "s3://${S3_BUCKET}/${MODELS_PREFIX}/" "$MODEL_DIR/" \
-  --region "$AWS_REGION" --no-cli-pager
+"$CONDA_ENV/bin/python" -m recon_pipeline.utilities.storage.s3.sync_models \
+  --bucket "$S3_BUCKET" --prefix "$MODELS_PREFIX" --destination "$MODEL_DIR" --region "$AWS_REGION"
+
+# Models are synchronized through the pipeline utility, without requiring AWS CLI.
+
 
 if [[ ! -f "$SMPLX_MODEL" ]]; then
   [[ -f "$SMPLX_ARCHIVE" ]] || fail "Licensed SMPL-X archive not found: $SMPLX_ARCHIVE"

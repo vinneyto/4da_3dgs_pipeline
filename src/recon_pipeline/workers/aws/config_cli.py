@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import argparse
-import copy
 from dataclasses import asdict
 import json
 from pathlib import Path
 from typing import Any, Sequence
 from urllib.parse import urlparse
 
-from .config import AwsWorkerConfig, load_document, materialize_pipeline_config
+from .config import load_document, validate_run_settings
+from recon_pipeline.run_document import SCHEMA_VERSION, strip_environment
 from recon_pipeline.utilities.reconstructions.nerfstudio._profile import (
     TrainingProfile,
     add_profile_arguments,
@@ -20,7 +20,7 @@ from recon_pipeline.utilities.reconstructions.nerfstudio._profile import (
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="recon-config",
-        description="Generate a validated schema-v6 JSON document for recon-aws-worker.",
+        description="Generate a validated schema-v7 JSON document for recon-aws-worker.",
     )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
@@ -30,48 +30,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--template",
         type=Path,
         help=(
-            "Copy an existing run document and override its run identity and input. "
-            "Use with --experiment-name and --video"
-        ),
-    )
-
-    environment = parser.add_argument_group("persistent execution environment")
-    environment.add_argument(
-        "--conda-bootstrap",
-        type=Path,
-        default=Path("/opt/conda/etc/profile.d/conda.sh"),
-    )
-    environment.add_argument(
-        "--conda-env",
-        type=Path,
-        default=Path("/home/sagemaker-user/.conda/envs/4danyone"),
-    )
-    environment.add_argument(
-        "--pipeline-repo-root",
-        type=Path,
-        default=Path("/home/sagemaker-user/work/4da_3dgs_pipeline"),
-    )
-    environment.add_argument(
-        "--fourdanyone-git-url",
-        default="https://github.com/ant-research/4DAnyone.git",
-    )
-    environment.add_argument(
-        "--fourdanyone-git-ref",
-        default="e38f210827f7b3effbe5b573ea07cfcf17e72dca",
-    )
-    environment.add_argument("--python-version", default="3.11")
-    environment.add_argument("--torch-version", default="2.8.0")
-    environment.add_argument("--torchvision-version", default="0.23.0")
-    environment.add_argument(
-        "--torch-index-url",
-        default="https://download.pytorch.org/whl/cu126",
-    )
-    environment.add_argument("--opencv-fallback-version", default="4.14.0.94")
-    environment.add_argument(
-        "--lock-file",
-        type=Path,
-        default=Path(
-            "/home/sagemaker-user/4danyone-data/environment/requirements-lock.txt"
+            "Copy an existing run document with a new --experiment-name. "
+            "Omit --video to preserve its input; stage and frame flags override the template"
         ),
     )
 
@@ -81,7 +41,7 @@ def build_parser() -> argparse.ArgumentParser:
     pipeline.add_argument(
         "--dataset",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=None,
         help="Run the 4DAnyone dataset stage",
     )
     pipeline.add_argument("--views-per-layer", type=int, default=24)
@@ -102,14 +62,14 @@ def build_parser() -> argparse.ArgumentParser:
     nerfstudio.add_argument(
         "--nerfstudio",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=None,
         help="Export synchronized static datasets from the completed 4DAnyone run",
     )
     nerfstudio.add_argument(
         "--nerfstudio-frames",
         type=int,
         nargs="+",
-        default=[60],
+        default=None,
     )
     nerfstudio.add_argument("--nerfstudio-device", default="cuda:0")
     nerfstudio.add_argument("--nerfstudio-source-experiment-name")
@@ -132,7 +92,7 @@ def build_parser() -> argparse.ArgumentParser:
     pipeline.add_argument(
         "--rerun",
         action=argparse.BooleanOptionalAction,
-        default=False,
+        default=None,
         help="Create an interactive Rerun recording after reconstruction",
     )
     pipeline.add_argument("--rerun-view-count", type=int, default=4)
@@ -149,19 +109,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     reconstruction = parser.add_argument_group("Static frame Splatfacto reconstruction")
     reconstruction.add_argument(
-        "--reconstruction", action=argparse.BooleanOptionalAction, default=False
+        "--reconstruction", action=argparse.BooleanOptionalAction, default=None
     )
     reconstruction.add_argument("--reconstruction-frames", type=int, nargs="+")
-    reconstruction.add_argument(
-        "--nerfstudio-bin",
-        type=Path,
-        default=Path("/home/sagemaker-user/.conda/envs/splatfacto/bin"),
-    )
     add_profile_arguments(reconstruction, prefix="splatfacto-")
     reconstruction.add_argument(
         "--reconstruction-rerun", action=argparse.BooleanOptionalAction, default=False
     )
-    reconstruction.add_argument("--reconstruction-rerun-python", type=Path)
     reconstruction.add_argument(
         "--reconstruction-rerun-max-splats", type=int, default=100_000
     )
@@ -235,17 +189,6 @@ def build_parser() -> argparse.ArgumentParser:
     sagemaker.add_argument("--sagemaker-space-name")
     sagemaker.add_argument("--sagemaker-app-name", default="default")
 
-    local = parser.add_argument_group("persistent local workspace")
-    local.add_argument(
-        "--data-root",
-        type=Path,
-        default=Path("/home/sagemaker-user/4danyone-data"),
-    )
-    local.add_argument(
-        "--fourdanyone-root",
-        type=Path,
-        default=Path("/home/sagemaker-user/work/4DAnyone"),
-    )
     return parser
 
 
@@ -311,15 +254,14 @@ def _replace_artifact_source_experiment(
 def build_document_from_template(args: argparse.Namespace) -> dict[str, Any]:
     if not args.experiment_name:
         raise ValueError("--template requires --experiment-name")
-    if not args.video:
-        raise ValueError("--template requires --video")
 
     document = load_document(args.template)
     previous_experiment_name = document.get("experiment_name")
     if not isinstance(previous_experiment_name, str) or not previous_experiment_name:
         raise ValueError("template must contain a non-empty experiment_name")
 
-    document = copy.deepcopy(document)
+    document = strip_environment(document)
+    document["schema_version"] = SCHEMA_VERSION
     document["experiment_name"] = args.experiment_name
     worker_payload = document.get("aws_worker")
     if not isinstance(worker_payload, dict):
@@ -329,7 +271,12 @@ def build_document_from_template(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("template must use the schema-v6 aws_worker.bucket object")
 
     worker_payload["job_id"] = args.job_id or args.experiment_name
-    bucket_payload["video"] = args.video
+    if args.s3_video_path:
+        raise ValueError(
+            "--template uses --video for input overrides, not --s3-video-path"
+        )
+    if args.video is not None:
+        bucket_payload["video"] = args.video
     if args.bucket:
         bucket_payload["name"] = args.bucket
     _replace_artifact_source_experiment(
@@ -338,14 +285,42 @@ def build_document_from_template(args: argparse.Namespace) -> dict[str, Any]:
         experiment_name=args.experiment_name,
     )
 
-    worker = AwsWorkerConfig.from_document(document)
-    materialize_pipeline_config(document, worker)
+    # None means omitted: preserve template settings rather than CLI defaults.
+    dataset = document["pipeline"]["dataset"]
+    reconstruction = document["pipeline"]["reconstruction"]
+    artifacts = document["artifacts"]["dataset"]
+    for value, target, key in (
+        (args.dataset, dataset, "enabled"),
+        (args.reconstruction, reconstruction, "enabled"),
+        (args.reconstruction_frames, reconstruction["config"], "frames"),
+        (args.nerfstudio, artifacts["nerfstudio"], "enabled"),
+        (args.nerfstudio_frames, artifacts["nerfstudio"], "frames"),
+        (
+            args.nerfstudio_source_experiment_name,
+            artifacts["nerfstudio"],
+            "source_experiment_name",
+        ),
+        (args.rerun, artifacts["rerun"], "enabled"),
+    ):
+        if value is not None:
+            target[key] = value
+
+    validate_run_settings(document)
     return document
 
 
 def build_document(args: argparse.Namespace) -> dict[str, Any]:
     if args.template:
         return build_document_from_template(args)
+    for name, default in {
+        "dataset": True,
+        "nerfstudio": True,
+        "nerfstudio_frames": [60],
+        "rerun": False,
+        "reconstruction": False,
+    }.items():
+        if getattr(args, name) is None:
+            setattr(args, name, default)
     if not args.experiment_name:
         raise ValueError("--experiment-name is required")
     if not args.video and not args.s3_video_path:
@@ -379,20 +354,7 @@ def build_document(args: argparse.Namespace) -> dict[str, Any]:
     bucket, video = _resolve_video(args)
     job_id = args.job_id or args.experiment_name
     document: dict[str, Any] = {
-        "schema_version": 6,
-        "environment": {
-            "conda_bootstrap": str(args.conda_bootstrap),
-            "conda_env": str(args.conda_env),
-            "pipeline_repo_root": str(args.pipeline_repo_root),
-            "fourdanyone_git_url": args.fourdanyone_git_url,
-            "fourdanyone_git_ref": args.fourdanyone_git_ref,
-            "python_version": args.python_version,
-            "torch_version": args.torch_version,
-            "torchvision_version": args.torchvision_version,
-            "torch_index_url": args.torch_index_url,
-            "opencv_fallback_version": args.opencv_fallback_version,
-            "lock_file": str(args.lock_file),
-        },
+        "schema_version": SCHEMA_VERSION,
         "experiment_name": args.experiment_name,
         "pipeline": {
             "dataset": {
@@ -414,7 +376,6 @@ def build_document(args: argparse.Namespace) -> dict[str, Any]:
                 "enabled": args.reconstruction,
                 "type": "nerfstudio_splatfacto",
                 "config": {
-                    "nerfstudio_bin": str(args.nerfstudio_bin),
                     "frames": args.reconstruction_frames,
                     **asdict(
                         TrainingProfile(
@@ -460,11 +421,6 @@ def build_document(args: argparse.Namespace) -> dict[str, Any]:
                     "device": "auto",
                     "replace_existing": False,
                     "max_splats": args.reconstruction_rerun_max_splats,
-                    "python": (
-                        str(args.reconstruction_rerun_python)
-                        if args.reconstruction_rerun_python
-                        else None
-                    ),
                 }
             },
         },
@@ -508,14 +464,9 @@ def build_document(args: argparse.Namespace) -> dict[str, Any]:
                 "space_name": args.sagemaker_space_name,
                 "app_name": args.sagemaker_app_name,
             },
-            "local": {
-                "data_root": str(args.data_root),
-                "fourdanyone_root": str(args.fourdanyone_root),
-            },
         },
     }
-    worker = AwsWorkerConfig.from_document(document)
-    materialize_pipeline_config(document, worker)
+    validate_run_settings(document)
     return document
 
 

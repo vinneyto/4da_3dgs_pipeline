@@ -1,30 +1,26 @@
 #!/usr/bin/env bash
 
-# Build the persistent 4DAnyone environment from one explicit JSON document.
+# Build the persistent 4DAnyone environment from RECON_* variables.
 # This script is CPU-safe; CUDA execution is validated when a GPU is present.
 
 set -Eeuo pipefail
 
-[[ $# -eq 1 ]] || { echo "usage: $0 /absolute/path/to/run.json" >&2; exit 2; }
-CONFIG_PATH="$1"
-[[ -f "$CONFIG_PATH" ]] || { echo "config not found: $CONFIG_PATH" >&2; exit 2; }
-
+[[ $# -eq 0 ]] || { echo "usage: $0 (settings come from RECON_* env)" >&2; exit 2; }
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-READ_CONFIG="$SCRIPT_DIR/read_config.py"
-get() { /usr/bin/python3 "$READ_CONFIG" "$CONFIG_PATH" "$1"; }
+get() { PYTHONPATH="$SCRIPT_DIR/../src${PYTHONPATH:+:$PYTHONPATH}" python3 -m recon_pipeline.environment_cli value "$1"; }
 
-CONDA_BOOTSTRAP="$(get environment.conda_bootstrap)"
-CONDA_ENV="$(get environment.conda_env)"
-PIPELINE_REPO_ROOT="$(get environment.pipeline_repo_root)"
-FOURDANYONE_ROOT="$(get aws_worker.local.fourdanyone_root)"
-FOURDANYONE_GIT_URL="$(get environment.fourdanyone_git_url)"
-FOURDANYONE_GIT_REF="$(get environment.fourdanyone_git_ref)"
-PYTHON_VERSION="$(get environment.python_version)"
-TORCH_VERSION="$(get environment.torch_version)"
-TORCHVISION_VERSION="$(get environment.torchvision_version)"
-TORCH_INDEX_URL="$(get environment.torch_index_url)"
-OPENCV_FALLBACK_VERSION="$(get environment.opencv_fallback_version)"
-LOCK_FILE="$(get environment.lock_file)"
+CONDA_BOOTSTRAP="$(get conda_bootstrap)"
+CONDA_ENV="$(get conda_env)"
+PIPELINE_REPO_ROOT="$(get pipeline_repo_root)"
+FOURDANYONE_ROOT="$(get fourdanyone_root)"
+FOURDANYONE_GIT_URL="$(get fourdanyone_git_url)"
+FOURDANYONE_GIT_REF="$(get fourdanyone_git_ref)"
+PYTHON_VERSION="$(get python_version)"
+TORCH_VERSION="$(get torch_version)"
+TORCHVISION_VERSION="$(get torchvision_version)"
+TORCH_INDEX_URL="$(get torch_index_url)"
+OPENCV_FALLBACK_VERSION="$(get opencv_fallback_version)"
+LOCK_FILE="$(get lock_file)"
 
 log() { printf '\n==> %s\n' "$*"; }
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
@@ -47,7 +43,10 @@ if [[ "$current_ref" != "$FOURDANYONE_GIT_REF" ]]; then
 fi
 
 # shellcheck disable=SC1090
+# Conda and its activation hooks access optional unset variables.
+set +u
 source "$CONDA_BOOTSTRAP"
+set -u
 if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; then
   EXPECT_CUDA=1
   log "GPU instance detected"
@@ -61,7 +60,9 @@ if [[ ! -x "$CONDA_ENV/bin/python" ]]; then
   log "Creating persistent conda environment: $CONDA_ENV"
   conda create --prefix "$CONDA_ENV" "python=$PYTHON_VERSION" pip -y
 fi
+set +u
 conda activate "$CONDA_ENV"
+set -u
 PYTHON="$CONDA_ENV/bin/python"
 
 log "Installing packaging tools and CUDA-enabled PyTorch"
@@ -78,7 +79,7 @@ log "Installing 4DAnyone requirements"
   "torchvision==$TORCHVISION_VERSION" \
   --index-url "$TORCH_INDEX_URL"
 
-opencv_version="$("$PYTHON" -m pip show opencv-python 2>/dev/null | awk '/^Version:/ {print $2}')"
+opencv_version="$("$PYTHON" -m pip show opencv-python 2>/dev/null | awk '/^Version:/ {print $2}' || true)"
 opencv_version="${opencv_version:-$OPENCV_FALLBACK_VERSION}"
 log "Replacing GUI OpenCV with headless $opencv_version"
 "$PYTHON" -m pip uninstall --yes opencv-python opencv-python-headless || true

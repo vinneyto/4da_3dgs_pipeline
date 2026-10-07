@@ -9,18 +9,28 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import urlparse
 
-from recon_pipeline.datasets.fourdanyone.config import FourDAnyoneConfig, extract_4danyone_dataset_config
-
+from recon_pipeline.environment import PipelineEnvironment
+from recon_pipeline.run_document import (
+    SUPPORTED_SCHEMA_VERSIONS,
+    validate_environment_free,
+)
+from recon_pipeline.datasets.fourdanyone.config import (
+    FourDAnyoneConfig,
+    extract_4danyone_dataset_config,
+)
 
 VALID_SHUTDOWN_POLICIES = frozenset({"never", "success", "failure", "always"})
-SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2, 3, 4, 5, 6})
 
 
 def load_document(path: Path) -> dict[str, Any]:
     document = json.loads(path.read_text())
     version = document.get("schema_version")
     if version not in SUPPORTED_SCHEMA_VERSIONS:
-        raise ValueError(f"config schema_version must be one of {sorted(SUPPORTED_SCHEMA_VERSIONS)}")
+        raise ValueError(
+            f"config schema_version must be one of {sorted(SUPPORTED_SCHEMA_VERSIONS)}"
+        )
+    if version >= 7:
+        validate_environment_free(document)
     return document
 
 
@@ -128,13 +138,22 @@ class BucketConfig:
         if self.video.startswith("s3://"):
             raise ValueError("aws_worker.bucket.video must be relative to input_prefix")
         path = PurePosixPath(video)
-        if not video or path.is_absolute() or ".." in path.parts or path.name in {"", ".", ".."}:
-            raise ValueError("aws_worker.bucket.video must be a safe relative object path")
+        if (
+            not video
+            or path.is_absolute()
+            or ".." in path.parts
+            or path.name in {"", ".", ".."}
+        ):
+            raise ValueError(
+                "aws_worker.bucket.video must be a safe relative object path"
+            )
         for field_name in ("input_prefix", "models_prefix", "runs_prefix"):
             prefix = getattr(self, field_name)
             prefix_path = PurePosixPath(prefix)
             if prefix_path.is_absolute() or ".." in prefix_path.parts:
-                raise ValueError(f"aws_worker.bucket.{field_name} must be a safe relative prefix")
+                raise ValueError(
+                    f"aws_worker.bucket.{field_name} must be a safe relative prefix"
+                )
 
     @property
     def video_key(self) -> str:
@@ -200,8 +219,10 @@ class AwsWorkerConfig:
     def from_dict(cls, payload: dict[str, Any]) -> "AwsWorkerConfig":
         notifications = payload.get("notifications") or {}
         sns_payload = notifications.get("email", payload.get("sns"))
-        if sns_payload is None and payload.get("sns_topic_name") and payload.get(
-            "notification_email"
+        if (
+            sns_payload is None
+            and payload.get("sns_topic_name")
+            and payload.get("notification_email")
         ):
             sns_payload = {
                 "topic_name": payload["sns_topic_name"],
@@ -256,44 +277,56 @@ class AwsWorkerConfig:
             bucket=bucket,
             sync_models=bool(payload.get("sync_models", True)),
             upload_results=bool(payload.get("upload_results", True)),
-            local=LocalWorkspaceConfig(**payload["local"]),
+            local=(
+                LocalWorkspaceConfig(**payload["local"])
+                if "local" in payload
+                else cls.workspace_from_environment()
+            ),
             sns=SnsConfig(**sns_payload) if sns_payload else None,
             telegram=TelegramConfig(**telegram_payload) if telegram_payload else None,
             sagemaker=SageMakerAppConfig(**sagemaker_payload),
         )
 
     @classmethod
-    def from_document(cls, document: dict[str, Any]) -> "AwsWorkerConfig":
+    def from_document(
+        cls, document: dict[str, Any], environment: PipelineEnvironment | None = None
+    ) -> "AwsWorkerConfig":
         try:
             payload = dict(document["aws_worker"])
         except KeyError as error:
             raise ValueError("config must contain an aws_worker object") from error
-        # Migrate the first run-document shape: its local paths lived inside
-        # pipeline and its input video was uploaded rather than downloaded.
-        if "local" not in payload:
+        if document.get("schema_version", 0) >= 7:
+            validate_environment_free(document)
+        # Old run paths never override this machine's environment.
+        payload["local"] = asdict(cls.workspace_from_environment(environment))
+        if (
+            not isinstance(payload.get("bucket"), dict)
+            and "s3_video_path" not in payload
+        ):
             pipeline = document.get("pipeline", {})
-            jobs_dir = Path(payload["jobs_dir"])
-            payload["local"] = {
-                "data_root": str(jobs_dir.parent),
-                "fourdanyone_root": pipeline["fourdanyone_root"],
-            }
-        if not isinstance(payload.get("bucket"), dict) and "s3_video_path" not in payload:
-            pipeline = document.get("pipeline", {})
-            filename = Path(pipeline["video_path"]).name
+            filename = Path(pipeline.get("video_path", pipeline.get("video", ""))).name
             prefix = str(payload.get("input_prefix", "input")).strip("/")
             key = "/".join(part for part in (prefix, filename) if part)
             payload["s3_video_path"] = f"s3://{payload['bucket']}/{key}"
         return cls.from_dict(payload)
 
+    @staticmethod
+    def workspace_from_environment(
+        environment: PipelineEnvironment | None = None,
+    ) -> LocalWorkspaceConfig:
+        environment = environment or PipelineEnvironment.from_environ()
+        return LocalWorkspaceConfig(environment.data_root, environment.fourdanyone_root)
+
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
-        payload["local"]["data_root"] = str(self.local.data_root)
-        payload["local"]["fourdanyone_root"] = str(self.local.fourdanyone_root)
+        payload.pop("local")
         return payload
 
 
 def materialize_pipeline_config(
-    document: dict[str, Any], worker: AwsWorkerConfig
+    document: dict[str, Any],
+    worker: AwsWorkerConfig,
+    environment: PipelineEnvironment | None = None,
 ) -> FourDAnyoneConfig:
     """Complete an AWS run's path-free pipeline section with staged local paths."""
     pipeline_payload = document.get("pipeline", document)
@@ -306,19 +339,44 @@ def materialize_pipeline_config(
         if "enable_turbo" in payload:
             raise ValueError("pipeline must use either turbo or enable_turbo, not both")
         payload["enable_turbo"] = payload.pop("turbo")
-    payload.update(
-        video_path=worker.local_video_path,
-        fourdanyone_root=worker.local.fourdanyone_root,
-        model_dir=worker.local.model_dir,
-        runs_dir=worker.local.runs_dir,
+    environment = environment or PipelineEnvironment.from_environ()
+    return FourDAnyoneConfig.from_dict(
+        environment.materialize(payload, worker.local_video_path)
     )
-    return FourDAnyoneConfig.from_dict(payload)
+
+
+def validate_run_settings(document: dict[str, Any]) -> None:
+    """Validate a portable config on any machine, without loading its environment."""
+    validate_environment_free(document)
+    payload = dict(document["aws_worker"])
+    # These placeholders only enable domain validation; they are never serialized
+    # or used to execute a pipeline.
+    payload["local"] = {"data_root": "/validation", "fourdanyone_root": "/validation"}
+    worker = AwsWorkerConfig.from_dict(payload)
+    settings = extract_4danyone_dataset_config(
+        document["pipeline"],
+        experiment_name=document.get("experiment_name"),
+        artifacts=document.get("artifacts"),
+    )
+    settings.pop("video", None)
+    if "turbo" in settings:
+        settings["enable_turbo"] = settings.pop("turbo")
+    FourDAnyoneConfig.from_dict(
+        {
+            **settings,
+            "video_path": worker.local_video_path,
+            "fourdanyone_root": worker.local.fourdanyone_root,
+            "model_dir": worker.local.model_dir,
+            "runs_dir": worker.local.runs_dir,
+        }
+    )
 
 
 def load_aws_worker_config(path: Path) -> tuple[FourDAnyoneConfig, AwsWorkerConfig]:
     document = load_document(path)
-    worker = AwsWorkerConfig.from_document(document)
+    environment = PipelineEnvironment.from_environ()
+    worker = AwsWorkerConfig.from_document(document, environment)
     if "pipeline" not in document:
         error = KeyError("pipeline")
         raise ValueError("config must contain a pipeline object") from error
-    return materialize_pipeline_config(document, worker), worker
+    return materialize_pipeline_config(document, worker, environment), worker

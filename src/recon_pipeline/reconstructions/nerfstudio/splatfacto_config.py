@@ -10,13 +10,16 @@ from recon_pipeline.utilities.reconstructions.nerfstudio._profile import Trainin
 class SplatfactoConfig(TrainingProfile):
     enabled: bool = False
     frames: tuple[int, ...] | None = None
-    nerfstudio_bin: str = "/home/sagemaker-user/.conda/envs/splatfacto/bin"
+    nerfstudio_bin: str | None = None
 
     def __post_init__(self):
         TrainingProfile.__post_init__(self)
         if not isinstance(self.enabled, bool):
             raise TypeError("reconstruction.enabled must be a boolean")
-        if not Path(self.nerfstudio_bin).is_absolute():
+        if (
+            self.nerfstudio_bin is not None
+            and not Path(self.nerfstudio_bin).is_absolute()
+        ):
             raise ValueError("reconstruction.nerfstudio_bin must be absolute")
         if self.frames is not None:
             object.__setattr__(self, "frames", tuple(self.frames))

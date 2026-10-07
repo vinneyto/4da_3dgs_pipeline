@@ -1,24 +1,156 @@
 # Reconstruction pipeline CLI
 
-## Install or update
+## Check an existing machine first
+
+After updating the repository, run this without changing your environment:
 
 ```bash
-cd "$HOME/work/4da_3dgs_pipeline"
-git switch main
-git pull --ff-only origin main
-
-python -m pip uninstall --yes fourda-3dgs-pipeline
-python -m pip install --editable '.[aws,rerun]'
-
-recon-config --help
-recon-aws-worker --help
+./scripts/check_environment.sh --require-cuda 2>&1 | tee environment-check.txt
+# Or a structured report; exit 1 means at least one failed check.
+./scripts/check_environment.sh --json --require-cuda > environment-check.json
 ```
+
+The checker needs only system Python. It does not install packages, change env
+variables, create workspace directories, call AWS, download weights or compile
+CUDA extensions. It reports every missing/invalid `RECON_*` variable, repository
+and GVHMR submodule, workspace folder, package version, executable, model asset,
+CUDA compiler and PyTorch GPU access. No credentials or unrelated env variables
+are included in the report. Without `--require-cuda`, absence of a GPU is a
+warning, allowing preparation on a CPU instance; broken imports still fail.
+
+## Install or update the machine environment
+
+```bash
+./scripts/setup_environment.sh --config config/run.example.json
+source "$HOME/.config/recon-pipeline/environment.sh"
+```
+
+Edit the example's bucket and SageMaker identifiers before model download. This
+script installs Conda if needed, checks out the pinned 4DAnyone repository and
+GVHMR, creates input/models/runs/jobs/environment folders and installs three
+separate persistent environments: 4DAnyone + AWS worker, Nerfstudio/Splatfacto +
+CUDA toolkit/compiler, and Splatfacto Rerun. It also downloads model weights when
+`--config` is supplied. Licensed SMPL-X assets must already be provided in your
+bucket; the installer cannot obtain that license for you.
+
+Existing exported `RECON_*` values take precedence over the saved env file and
+installation defaults. Variables are saved to
+`~/.config/recon-pipeline/environment.sh` and loaded from Bash startup files.
+Use `--env-file FILE` (or `RECON_ENV_FILE`) to choose another file and source it
+in the current terminal. Defaults are based on the current user's home and the
+repository location, without a hard-coded SageMaker username.
+
+Configure-only preserves the existing `CUDA_HOME`, or detects a toolkit already
+on `PATH`. The checker prints the detected CUDA version even before
+`RECON_CUDA_VERSION` has been exported.
+
+To fill/persist variables on an existing machine without reinstalling anything:
+
+```bash
+./scripts/setup_environment.sh --configure-only
+source "$HOME/.config/recon-pipeline/environment.sh"
+./scripts/check_environment.sh --require-cuda
+```
+
+Inspect missing settings before using configure-only: it does not discover old
+custom paths; export those explicitly first. Full setup is for Linux x86_64.
+Tool installation can run without `--config`; in that case model download is a
+separate step and the final checker reports any missing assets.
+
+If the checker confirms that 4DAnyone already runs with CUDA and model assets
+are present, reuse that environment while installing the missing tools:
+
+```bash
+./scripts/setup_environment.sh --reuse-4danyone
+source "$HOME/.config/recon-pipeline/environment.sh"
+./scripts/check_environment.sh --require-cuda
+```
+
+This mode installs the pipeline's AWS/Rerun worker extras (including `telebot`),
+writes the package lock and installs Splatfacto and its Rerun environment. It
+skips the 4DAnyone repository setup, requirements and PyTorch installation. Full
+installation selects and persists the Splatfacto toolkit in `CUDA_HOME`.
+
+Installation writes its complete output to a timestamped `environment-setup-*.log`
+in the pipeline checkout. Each stage is labeled; a failure prints the stage,
+exit status and log path. Use `--log-file FILE` to choose a path. To diagnose a
+partially installed machine, rerun setup and share the end of that log:
+
+```bash
+./scripts/setup_environment.sh --reuse-4danyone --log-file environment-setup.log
+tail -n 100 environment-setup.log
+```
+
+Existing Conda prefixes are reused. The checker reports missing packages even
+when an environment contains only Python; its output does not contain the
+installer's failure reason. Configure-only does not create an installation log.
+
+Setup installs EGL/OpenGL and libusb libraries inside the Splatfacto Conda prefix. The
+checker imports Open3D and creates an empty point cloud to catch missing native
+libraries before training (including `libEGL.so.1` on headless SageMaker images).
+To repair an existing installation without rerunning the full setup:
+
+```bash
+conda install --prefix "$(dirname "$RECON_NERFSTUDIO_BIN")" \
+  -c conda-forge libegl libgl libusb -y
+./scripts/check_environment.sh --require-cuda
+```
+
+Restart a failed worker with the same config and without `--force` to reuse
+completed pass checkpoints, including the exported Nerfstudio datasets.
+
+## Environment boundary
+
+`PipelineEnvironment` (`src/recon_pipeline/environment.py`) reads machine
+settings from environment variables at the orchestration boundary. Runtime
+loading has no path or version defaults and lists missing variables together.
+Only installation supplies defaults. `RECON_NS_BIN`, used in the previous
+standalone instructions, is accepted as an alias for `RECON_NERFSTUDIO_BIN`.
+
+| Machine setting | Environment variable |
+| --- | --- |
+| Conda initialization | `RECON_CONDA_BOOTSTRAP` |
+| 4DAnyone/worker Conda prefix | `RECON_CONDA_ENV` |
+| Pipeline checkout | `RECON_PIPELINE_ROOT` |
+| 4DAnyone checkout | `RECON_FOURDANYONE_ROOT` |
+| Workspace root | `RECON_DATA_ROOT` |
+| 4DAnyone repository URL and revision | `RECON_FOURDANYONE_GIT_URL`, `RECON_FOURDANYONE_GIT_REF` |
+| Python version | `RECON_PYTHON_VERSION` |
+| 4DAnyone PyTorch and Torchvision | `RECON_TORCH_VERSION`, `RECON_TORCHVISION_VERSION` |
+| 4DAnyone wheel index | `RECON_TORCH_INDEX_URL` |
+| OpenCV fallback version | `RECON_OPENCV_FALLBACK_VERSION` |
+| 4DAnyone package lock | `RECON_LOCK_FILE` |
+| Splatfacto executables | `RECON_NERFSTUDIO_BIN` |
+| Splatfacto Rerun interpreter | `RECON_SPLATFACTO_RERUN_PYTHON` |
+| Splatfacto PyTorch and Torchvision | `RECON_SPLATFACTO_TORCH_VERSION`, `RECON_SPLATFACTO_TORCHVISION_VERSION` |
+| Splatfacto wheel index | `RECON_SPLATFACTO_TORCH_INDEX_URL` |
+| Nerfstudio, gsplat, CUDA toolkit versions | `RECON_NERFSTUDIO_VERSION`, `RECON_GSPLAT_VERSION`, `RECON_CUDA_VERSION` |
+
+The setup file also sets `PATH`, `CUDA_HOME`, `CXX` and `LD_LIBRARY_PATH` for the
+installed tools. When Conda CUDA headers exist under
+`$CUDA_HOME/targets/x86_64-linux/include`, it also prepends that directory to
+`CPATH` for gsplat's C++ compilation, preserving existing entries without
+duplicating the directory on repeated sourcing. Use `--configure-only` followed
+by sourcing the env file to refresh these settings without reinstalling.
+Run JSON schema v7 contains only pipeline/artifact settings and
+high-level AWS settings (bucket, region, prefixes, notifications, SageMaker).
+It rejects `environment`, `aws_worker.local`, `nerfstudio_bin`, interpreter and
+workspace paths. Local inputs use `pipeline.dataset.config.video`, relative to
+`RECON_DATA_ROOT/input`. Older run documents can still be loaded, but their
+machine settings are ignored in favor of env. Cloning a v6 template removes them
+and writes v7; the source JSON remains intact.
+
+Utilities remain independent: paths, tool binaries and operation parameters
+are explicit CLI arguments. They do not import `PipelineEnvironment` or read
+`RECON_*` settings. Passes supply those arguments and select the env interpreter.
+Generating/validating run JSON with `recon-config` needs no configured machine,
+Conda installation or GPU.
 
 ## Clone an existing run configuration
 
-Use a validated JSON document as a template when only the input and run identity
-change. All pipeline, artifact, environment, AWS, notification, and shutdown
-settings are preserved. Artifact source references that pointed at the template
+Use a validated JSON document as a template with a new run identity. Omit
+`--video` to preserve the input. Pipeline, artifact, AWS, notification and shutdown
+settings are preserved unless explicitly overridden. Artifact source references that pointed at the template
 experiment are updated to the new experiment automatically.
 
 ```bash
@@ -38,28 +170,32 @@ Pass `--force` only when the output file may be replaced deliberately. Use
 `--job-id` to override the default new job ID or `--bucket` to move the cloned
 run to another bucket.
 
+Template copies accept `--dataset`/`--no-dataset`,
+`--reconstruction`/`--no-reconstruction`, `--reconstruction-frames`,
+`--nerfstudio`/`--no-nerfstudio`, `--nerfstudio-frames`,
+`--nerfstudio-source-experiment-name`, and `--rerun`/`--no-rerun`.
+To reconstruct every frame from an existing 4DAnyone experiment:
+
+```bash
+recon-config \
+  --template config/leo-three-layers-rerun.json \
+  --output config/leo-three-layers-splatfacto-all.json \
+  --experiment-name leo_three_layers_72views_splatfacto_all_01 \
+  --no-dataset --reconstruction --nerfstudio \
+  --nerfstudio-frames $(seq 0 120) \
+  --nerfstudio-source-experiment-name leo_three_layers_72views_01 \
+  --no-rerun
+```
+
+`--reconstruction-frames` preserves an existing selection when omitted. A null
+selection in the source config trains all exported frames. Other generator
+options (such as training profile flags) do not override template settings.
+
 ## Configure a three-layer AWS run
 
 Define every value used to generate the run document:
 
 ```bash
-# Persistent environment
-export RECON_CONDA_BOOTSTRAP="/opt/conda/etc/profile.d/conda.sh"
-export RECON_CONDA_ENV="$HOME/.conda/envs/4danyone"
-export RECON_PIPELINE_ROOT="$HOME/work/4da_3dgs_pipeline"
-export RECON_FOURDANYONE_ROOT="$HOME/work/4DAnyone"
-export RECON_DATA_ROOT="$HOME/4danyone-data"
-export RECON_LOCK_FILE="$RECON_DATA_ROOT/environment/requirements-lock.txt"
-
-# Pinned upstream and Python packages
-export RECON_FOURDANYONE_GIT_URL="https://github.com/ant-research/4DAnyone.git"
-export RECON_FOURDANYONE_GIT_REF="e38f210827f7b3effbe5b573ea07cfcf17e72dca"
-export RECON_PYTHON_VERSION="3.11"
-export RECON_TORCH_VERSION="2.8.0"
-export RECON_TORCHVISION_VERSION="0.23.0"
-export RECON_TORCH_INDEX_URL="https://download.pytorch.org/whl/cu126"
-export RECON_OPENCV_FALLBACK_VERSION="4.14.0.94"
-
 # Run identity
 export RECON_EXPERIMENT_NAME="leo_three_layers_72views_01"
 export RECON_JOB_ID="$RECON_EXPERIMENT_NAME"
@@ -109,17 +245,6 @@ Generate the complete JSON document without relying on configurable CLI defaults
 ```bash
 recon-config \
   --output "$RECON_RUN_CONFIG" \
-  --conda-bootstrap "$RECON_CONDA_BOOTSTRAP" \
-  --conda-env "$RECON_CONDA_ENV" \
-  --pipeline-repo-root "$RECON_PIPELINE_ROOT" \
-  --fourdanyone-git-url "$RECON_FOURDANYONE_GIT_URL" \
-  --fourdanyone-git-ref "$RECON_FOURDANYONE_GIT_REF" \
-  --python-version "$RECON_PYTHON_VERSION" \
-  --torch-version "$RECON_TORCH_VERSION" \
-  --torchvision-version "$RECON_TORCHVISION_VERSION" \
-  --torch-index-url "$RECON_TORCH_INDEX_URL" \
-  --opencv-fallback-version "$RECON_OPENCV_FALLBACK_VERSION" \
-  --lock-file "$RECON_LOCK_FILE" \
   --experiment-name "$RECON_EXPERIMENT_NAME" \
   --job-id "$RECON_JOB_ID" \
   --dataset \
@@ -159,9 +284,7 @@ recon-config \
   --telegram-allowed-user-id "$CP_4DA_TELEGRAM_ALLOWED_USER_ID" \
   --sagemaker-domain-id "$CP_SM_DOMAIN_ID" \
   --sagemaker-space-name "$CP_SM_SPACE_NAME" \
-  --sagemaker-app-name "$CP_SM_JUPYTER_APP_NAME" \
-  --data-root "$RECON_DATA_ROOT" \
-  --fourdanyone-root "$RECON_FOURDANYONE_ROOT"
+  --sagemaker-app-name "$CP_SM_JUPYTER_APP_NAME"
 ```
 
 Telegram notifications are event-driven: one startup plan, then pass start,
@@ -338,9 +461,9 @@ Telegram access uses the synchronous `pyTelegramBotAPI` client, included in the
 
 This stage follows the working [Splatfacto Colab](https://colab.research.google.com/drive/1yJ7sgxn7TxiW0m5CASOdGU5bD04tzzLq): private RGB+mask-to-RGBA copies, stock Splatfacto with random backgrounds and all input cameras, then a full Gaussian PLY with SH coefficients. The default profile is 60,000 iterations, SH degree 2, threshold 127 and 1px mask erosion. Source datasets are preserved.
 
-Install the upstream tools manually in a separate environment. The notebook uses Python 3.11, PyTorch 2.2.2+cu121, torchvision 0.17.2+cu121, Nerfstudio 1.1.5 and gsplat 1.4.0. That environment also needs NumPy, Pillow, OpenCV, ninja and a working CUDA toolkit. Set `pipeline.reconstruction.config.nerfstudio_bin` to its `bin` directory containing `python`, `ns-train` and `ns-export`. The pipeline never installs packages or patches Nerfstudio.
+`scripts/setup_environment.sh` installs the tools in a separate environment using the notebook profile: Python 3.11, PyTorch 2.2.2+cu121, torchvision 0.17.2+cu121, Nerfstudio 1.1.5 and gsplat 1.4.0. `RECON_NERFSTUDIO_BIN` points to its `bin` directory containing `python`, `ns-train` and `ns-export`. Running a pipeline never installs packages or patches Nerfstudio.
 
-The ready-to-edit `config/splatfacto-run.example.json` trains frame 60 from a saved 4DAnyone experiment and exports its reconstruction recording. Set its bucket, source experiment, local paths and environment paths before running.
+The ready-to-edit `config/splatfacto-run.example.json` trains frame 60 from a saved 4DAnyone experiment and exports its reconstruction recording. Set its bucket, SageMaker identifiers and source experiment before running.
 
 Enable `pipeline.reconstruction.enabled` in the JSON. Leave `config.frames` as `null` to train every frame listed in `artifacts.dataset.nerfstudio.frames`, or supply a subset. The Nerfstudio dataset artifact must be enabled. To use an existing 4DAnyone run, disable `pipeline.dataset.enabled` and select its name in `artifacts.dataset.nerfstudio.source_experiment_name`.
 
@@ -349,7 +472,7 @@ The generator also accepts `--reconstruction`, `--nerfstudio-bin`, `--reconstruc
 Run one frame independently, using the same environment as the pipeline:
 
 ```bash
-export RECON_NS_BIN="$HOME/.conda/envs/splatfacto/bin"
+export RECON_NS_BIN="$RECON_NERFSTUDIO_BIN"
 export RECON_STATIC_DATASET="$RECON_DATA_ROOT/runs/$RECON_EXPERIMENT_NAME/nerfstudio/frame_060"
 export RECON_STATIC_OUTPUT="$RECON_DATA_ROOT/runs/$RECON_EXPERIMENT_NAME/splatfacto/frame_060"
 export RECON_TRAINING_NAME="${RECON_EXPERIMENT_NAME}_frame_060"
@@ -396,7 +519,7 @@ For preparation alone, run `recon-prepare-rgba --dataset ... --output ... --mask
 
 Outputs for each frame live in `splatfacto/frame_NNN/`: the RGBA training dataset, Nerfstudio config/checkpoints, `dataparser_transforms.json`, TensorBoard events, training/export logs, `exports/splat.ply`, and `experiment_manifest.json`. The Gaussian PLY is checked for positions, scales, rotations, opacity, DC and higher SH coefficients. `pipeline-result.json` lists all reconstructed frames; the regular result upload includes their outputs.
 
-For the notebook's optional reconstruction recording, enable `artifacts.reconstruction.rerun.enabled` and set its `python` to a separately installed Rerun environment. It needs Rerun 0.36, NumPy, Pillow, plyfile and TensorBoard (the `splatfacto-rerun` extra describes those dependencies). The generator accepts `--reconstruction-rerun`, `--reconstruction-rerun-python`, `--reconstruction-rerun-max-splats` and `--reconstruction-rerun-view-count`.
+For the notebook's optional reconstruction recording, enable `artifacts.reconstruction.rerun.enabled`. Its interpreter comes from `RECON_SPLATFACTO_RERUN_PYTHON`. It needs Rerun 0.36, NumPy, Pillow, plyfile and TensorBoard (the `splatfacto-rerun` extra describes those dependencies). The generator accepts `--reconstruction-rerun`, `--reconstruction-rerun-max-splats` and `--reconstruction-rerun-view-count`.
 
 A separate recording pass per frame writes `rerun/reconstruction.rrd`, with aligned cameras, four selected views, metrics and a Gaussian-center debug view. `max_splats` limits only the Rerun sample; the full `exports/splat.ply` stays intact. Reconstruction recordings currently use the current run's freshly trained models; cross-experiment recording-only runs are rejected explicitly.
 
@@ -409,6 +532,39 @@ recon-aws-worker plan --config "$RECON_RUN_CONFIG"
 ```
 
 ## Run in the background
+
+For a sequential queue, repeat `--config` in execution order:
+
+```bash
+recon-aws-worker start \
+  --config config/experiment-1.json \
+  --config config/experiment-2.json \
+  --config config/experiment-3.json \
+  --queue-id splatfacto-batch \
+  --shutdown-on always
+
+recon-aws-worker logs --queue-id splatfacto-batch --follow
+recon-aws-worker status --queue-id splatfacto-batch --json
+recon-aws-worker stop --queue-id splatfacto-batch
+```
+
+Each experiment finishes before the next starts. Failed experiments are recorded
+and the queue continues. Per-experiment shutdown is disabled; the queue's policy
+is applied only after all experiments finish. `always` stops the App regardless
+of failures; `never` leaves it running; `success` requires all runs to succeed;
+`failure` stops it if any run fails. If omitted, the queue uses the final config's
+policy. For a single config, `--shutdown-on` overrides that run's policy.
+Input JSON files are never modified.
+
+Queue configs must have distinct experiment/job IDs and target the same
+SageMaker App and region. An omitted queue ID defaults to `queue-<first job ID>`.
+Each experiment retains its own job status, log and reconstruction checkpoints.
+The queue has a combined live log and a `queue-result.json` summary under
+`$RECON_DATA_ROOT/jobs/<queue-id>/`. Any failed experiment makes the final queue
+status `failed`, even though later experiments still run. Restart the same queue
+without `--force` to reuse completed pass checkpoints. `stop --queue-id` cancels
+the current experiment and prevents remaining experiments from starting; it
+does not apply the automatic shutdown policy.
 
 ```bash
 recon-aws-worker start --config "$RECON_RUN_CONFIG"
@@ -460,7 +616,8 @@ The configured Telegram bot also accepts:
 ## One-time environment and model setup
 
 ```bash
-./scripts/setup_4danyone_env.sh "$RECON_RUN_CONFIG"
+./scripts/setup_environment.sh --config "$RECON_RUN_CONFIG"
+# To download/validate weights separately after installation:
 ./scripts/download_4danyone_models.sh "$RECON_RUN_CONFIG"
 ```
 

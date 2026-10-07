@@ -50,6 +50,9 @@ recon-s3-download-input = "recon_pipeline.utilities.storage.s3.download_input:ma
 recon-s3-sync-models = "recon_pipeline.utilities.storage.s3.sync_models:main"
 recon-s3-restore-experiment = "recon_pipeline.utilities.storage.s3.restore_experiment:main"
 recon-s3-upload-results = "recon_pipeline.utilities.storage.s3.upload_results:main"
+recon-s3-publish-artifacts = "recon_pipeline.utilities.storage.s3.publish_artifacts:main"
+recon-s3-recover-run = "recon_pipeline.utilities.storage.s3.recover_run:main"
+recon-s3-upload-diagnostics = "recon_pipeline.utilities.storage.s3.upload_diagnostics:main"
 recon-write-run-manifest = "recon_pipeline.utilities.artefacts.manifest.write:main"
 
 [tool.setuptools]

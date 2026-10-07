@@ -319,6 +319,9 @@ sequencing, checkpoints and notifications.
 | Restore source experiment | `recon-s3-restore-experiment` | `utilities.storage.s3.restore_experiment` |
 | Write manifest | `recon-write-run-manifest` | `utilities.artefacts.manifest.write` |
 | Upload results | `recon-s3-upload-results` | `utilities.storage.s3.upload_results` |
+| Commit one pass's artifacts | `recon-s3-publish-artifacts` | `utilities.storage.s3.publish_artifacts` |
+| Restore committed pass results | `recon-s3-recover-run` | `utilities.storage.s3.recover_run` |
+| Save status and diagnostic logs | `recon-s3-upload-diagnostics` | `utilities.storage.s3.upload_diagnostics` |
 
 Each utility has its own file and can be run with a console command, `python -m`,
 or the Python debugger:
@@ -418,10 +421,11 @@ recon-s3-upload-results \
 ```
 
 Use `--replace-existing` to rebuild an existing inference directory, frame
-dataset or recording. Downloads/restores discard their owned local output;
-uploads delete only the selected S3 prefix before uploading. The pipeline passes
-this flag when rerunning a pass; checkpoint and `--force` behavior is preserved.
-Shared model caches are retained.
+dataset or recording. Downloads/restores using this flag discard their owned
+local output. The standalone whole-directory `recon-s3-upload-results` command
+deletes the selected S3 prefix when given this flag. The AWS worker instead
+publishes individual committed artifact bundles and does not delete the run
+prefix. Shared model caches are retained.
 
 Stdout is newline-delimited JSON with `event: "progress"` and one final
 `event: "result"`. Diagnostics from upstream libraries/exporters go to stderr.
@@ -517,7 +521,7 @@ PYTHONPATH="$RECON_PIPELINE_ROOT/src${PYTHONPATH:+:$PYTHONPATH}" \
 
 For preparation alone, run `recon-prepare-rgba --dataset ... --output ... --mask-threshold ... --mask-erosion-pixels ...` in an environment with NumPy, Pillow and OpenCV. Every utility also supports `--help` without GPU imports. Existing standalone output directories require an explicit `--replace-existing`.
 
-Outputs for each frame live in `splatfacto/frame_NNN/`: the RGBA training dataset, Nerfstudio config/checkpoints, `dataparser_transforms.json`, TensorBoard events, training/export logs, `exports/splat.ply`, and `experiment_manifest.json`. The Gaussian PLY is checked for positions, scales, rotations, opacity, DC and higher SH coefficients. `pipeline-result.json` lists all reconstructed frames; the regular result upload includes their outputs.
+Outputs for each frame live in `splatfacto/frame_NNN/`: the RGBA training dataset, Nerfstudio config/checkpoints, `dataparser_transforms.json`, TensorBoard events, training/export logs, `exports/splat.ply`, and `experiment_manifest.json`. The Gaussian PLY is checked for positions, scales, rotations, opacity, DC and higher SH coefficients. `pipeline-result.json` lists all reconstructed frames. With `upload_results: true`, each complete frame folder is uploaded immediately after its reconstruction pass.
 
 For the notebook's optional reconstruction recording, enable `artifacts.reconstruction.rerun.enabled`. Its interpreter comes from `RECON_SPLATFACTO_RERUN_PYTHON`. It needs Rerun 0.36, NumPy, Pillow, plyfile and TensorBoard (the `splatfacto-rerun` extra describes those dependencies). The generator accepts `--reconstruction-rerun`, `--reconstruction-rerun-max-splats` and `--reconstruction-rerun-view-count`.
 
@@ -574,17 +578,45 @@ recon-aws-worker logs --config "$RECON_RUN_CONFIG" --lines 200
 recon-aws-worker logs --config "$RECON_RUN_CONFIG" --lines 200 --follow
 ```
 
-The worker checkpoints every successfully completed pass in the experiment's
-`.recon-pipeline/pass-state.json`. Running the same `start` command again:
+The AWS worker checkpoints successful passes locally in the experiment's
+`.recon-pipeline/pass-state.json`. With the existing `aws_worker.upload_results`
+set to `true`, it also adds an upload pass immediately after workspace creation,
+4DAnyone inference, Nerfstudio dataset export, each Splatfacto frame, each Rerun
+export, and the final run manifest. No config schema change is required.
 
-- archives the previous terminal job attempt and its log;
-- restores the longest unchanged prefix of completed passes;
-- starts at the first incomplete or newly inserted pass;
-- invalidates and reruns every pass after that boundary;
-- removes each rerun pass's owned output immediately before the pass starts.
+Each upload transfers only its producer's outputs to the existing
+`s3://<bucket>/<runs_prefix>/<experiment>/` layout. A completion record is written
+last under `.recon-pipeline/commits/`, with the producer's result, settings
+signature, relative paths, file sizes and SHA-256 hashes. Artifacts must be
+successfully uploaded before their completion is committed. Publishing does
+not delete the experiment prefix or other experiments.
 
-If every configured pass is complete, the worker skips all regular passes. It
-never starts a second process while the same job is still running.
+Running the same `start` command again, including on an empty disk:
+
+- archives any previous local terminal job attempt and log;
+- restores matching committed outputs from S3 and verifies their hashes;
+- rebuilds local checkpoints, rebasing artifact paths to `RECON_DATA_ROOT`;
+- rechecks AWS access and synchronizes input/model/source dependencies;
+- skips completed computations whose settings and required outputs still match;
+- retries an unfinished upload without repeating its completed computation when
+  that computation is still present locally;
+- executes incomplete or changed passes and uploads their outputs.
+
+Passes are matched by ID rather than by their position. Adding upload passes
+does not discard completed reconstructions. Expanding an export's frame list
+invalidates that export, while retaining already completed reconstruction
+frames whose training settings still match. Existing local checkpoints from
+before cloud recovery are adopted using their saved `pipeline-config.json`
+and output checks, then uploaded; legacy S3-only experiments have no pass
+completion records and cannot automatically skip their own computations.
+References to legacy source experiments remain supported: only their
+`4danyone/` data is downloaded, not unrelated reconstruction folders.
+
+Infrastructure checks still run even when all computational passes are done.
+The worker never starts a second process while the same local job is running.
+Use a single worker per experiment; cross-machine execution locks are not yet
+provided. Keep experiment names and input object keys immutable. If their
+contents are replaced without changing settings, use `--force`.
 
 Ignore all checkpoints and rebuild the experiment from its first pass:
 
@@ -592,13 +624,46 @@ Ignore all checkpoints and rebuild the experiment from its first pass:
 recon-aws-worker start --config "$RECON_RUN_CONFIG" --force
 ```
 
-Use `--force` after changing parameters of an existing pass. Pass insertion,
-removal, or reordering is detected automatically from the ordered checkpoint
-sequence and invalidates that pass position and every later pass.
+Changes to dataset, export and training settings automatically invalidate the
+corresponding computations. `--force` ignores local checkpoints and removes
+the selected plan's S3 completion records before recomputing. It preserves
+artifact objects until they are overwritten by successful new uploads.
 
 No manual deletion of `runs/<experiment>` or `jobs/<job>` is required between
 attempts. `--force` does not delete shared model caches; cleanup is limited to
 outputs owned by the pass being rerun.
+
+### Cloud status and failure reports
+
+The worker uploads status, its input config snapshot, and recent log tails at
+startup and every 60 seconds. Log tails are limited to 1 MiB per file: the
+pipeline log and up to three recent operation logs. Small status updates do
+not retransmit artifact bundles. Literal Telegram tokens are redacted in
+config snapshots; environment variable names are preserved.
+
+The latest status is at
+`runs/<experiment>/.recon-pipeline/status.json` (using your configured runs
+prefix). It points to an attempt directory containing `report.json`,
+`status.json`, `request.json`, `job/pipeline.log`, and operation logs under
+`logs/`. Attempt paths are unique, so a restart preserves earlier reports.
+The final report includes completed passes, durations, the failed pass ID,
+exception type and message, full traceback, command, exit code, and captured
+output tail where available. Empty exception messages use their representation.
+
+Before applying either a single-run or queue shutdown policy, the worker saves
+the final report and full logs. If an artifact upload or final diagnostics
+upload fails, managed shutdown is deferred to preserve the local copy. A queue
+still continues to its next experiment, then defers shutdown if any experiment
+has unsaved data. Fix S3 access and restart the affected experiment to retry.
+Setting `upload_results: false` disables cloud recovery, reports and these
+shutdown protections; local checkpoints remain available.
+
+Completed committed frames survive disk/VM loss. A forced termination can
+interrupt the current computation or upload; that unfinished frame is retrained
+after restoration, rather than resumed from an intermediate training iteration.
+A hard kill cannot guarantee a final failure report, but the latest heartbeat
+and previously committed outputs remain in S3. Container deployment itself is
+outside this change.
 
 ## Stop
 

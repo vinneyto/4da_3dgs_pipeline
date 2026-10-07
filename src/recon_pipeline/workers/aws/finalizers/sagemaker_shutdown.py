@@ -14,9 +14,19 @@ class SageMakerShutdownFinalizer:
         self.worker = worker
 
     def run(self, context: PipelineContext, outcome: PipelineOutcome) -> None:
+        if context.values.get("s3_persistence_failed"):
+            print(
+                "Shutdown deferred: artifacts or diagnostics could not be saved to S3",
+                flush=True,
+            )
+            return
+        if isinstance(outcome.error, KeyboardInterrupt):
+            return
         policy = self.worker.shutdown_on
-        should_stop = policy == "always" or (
-            policy == "success" and outcome.error is None
-        ) or (policy == "failure" and outcome.error is not None)
+        should_stop = (
+            policy == "always"
+            or (policy == "success" and outcome.error is None)
+            or (policy == "failure" and outcome.error is not None)
+        )
         if should_stop:
             stop_sagemaker_app(self.worker.region, self.worker.sagemaker)

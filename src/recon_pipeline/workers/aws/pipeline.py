@@ -28,10 +28,17 @@ from .passes import (
     S3DownloadInputPass,
     S3RestoreExperimentPass,
     S3SyncModelsPass,
-    S3UploadResultsPass,
     WriteRunManifestPass,
 )
 from .status import JobStatus
+from .recovery import (
+    RecoverablePass,
+    RecoveryCheckpointStore,
+    artifact_paths,
+    fingerprint,
+)
+from .passes.upload_artifacts import S3UploadArtifactsPass
+from .persistence import S3PersistenceObserver, S3DiagnosticsFinalizer
 
 
 def required_source_experiments(
@@ -84,8 +91,28 @@ def build_aws_pipeline(
     if config.rerun.enabled:
         passes.append(RerunExportPass(config))
     passes.append(WriteRunManifestPass(config))
-    if worker.upload_results:
-        passes.append(S3UploadResultsPass(worker, config))
+    settings = config.settings_dict()
+    input_identity = (worker.bucket_name, worker.input_prefix, worker.bucket.video)
+    legacy = None
+    saved_settings = config.experiment_dir / "pipeline-config.json"
+    if saved_settings.is_file():
+        import json
+
+        legacy = json.loads(saved_settings.read_text())
+    composed, uploads = [], []
+    for item in passes:
+        if artifact_paths(item, config):
+            signature = fingerprint(item.id, settings, input_identity)
+            legacy_signature = (
+                fingerprint(item.id, legacy, input_identity) if legacy else None
+            )
+            item = RecoverablePass(item, config, signature, legacy_signature)
+        composed.append(item)
+        if worker.upload_results and isinstance(item, RecoverablePass):
+            upload = S3UploadArtifactsPass(worker, config, item)
+            uploads.append(upload)
+            composed.append(upload)
+    passes = composed
 
     observers = [
         ConsoleObserver(),
@@ -93,13 +120,21 @@ def build_aws_pipeline(
         AwsNotificationObserver(worker, config.experiment_name),
         RuntimeMonitoringObserver(worker),
     ]
+    finalizers = [SageMakerShutdownFinalizer(worker)]
+    store = JsonPassCheckpointStore(
+        config.experiment_dir / ".recon-pipeline/pass-state.json",
+        config.experiment_name,
+    )
+    if worker.upload_results:
+        persistence = S3PersistenceObserver(worker, config, job_dir)
+        observers.append(persistence)
+        finalizers.insert(0, S3DiagnosticsFinalizer(persistence))
+        store = RecoveryCheckpointStore(worker, config, uploads)
     return Pipeline(
         passes,
-        finalizers=[SageMakerShutdownFinalizer(worker)],
+        finalizers=finalizers,
         observers=observers,
-        checkpoint_store=JsonPassCheckpointStore(
-            config.experiment_dir / ".recon-pipeline/pass-state.json",
-            config.experiment_name,
-        ),
+        checkpoint_store=store,
+        resume_by_id=True,
         force=force,
     )

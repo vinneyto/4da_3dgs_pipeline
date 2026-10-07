@@ -196,3 +196,29 @@ def test_queue_cli_accepts_multiple_configs_and_management_id():
     for name in ("logs", "status", "stop"):
         args = parser.parse_args([name, "--queue-id", "batch"])
         assert args.queue_id == "batch" and args.config is None
+
+
+def test_queue_continues_but_defers_shutdown_after_failed_s3_persistence(
+    configs, monkeypatch
+):
+    job, request = queue.build_start_request(configs, "always")
+    job.prepare(request)
+    calls = []
+
+    def run_child(child, document):
+        child.prepare(document)
+        calls.append(child.job_id)
+        state = "failed" if child.job_id == "run-0" else "succeeded"
+        JobStatus(job_id=child.job_id, state=state).write(child.status_path)
+        if state == "failed":
+            (child.root / "s3-persistence-failed").touch()
+        return int(state == "failed")
+
+    monkeypatch.setattr(queue, "_run_child", run_child)
+    monkeypatch.setattr(
+        queue,
+        "stop_sagemaker_app",
+        lambda *args: pytest.fail("Unsaved data must prevent shutdown"),
+    )
+    assert queue.run_queue(job.root, request) == 1
+    assert calls == ["run-0", "run-1", "run-2"]

@@ -180,7 +180,20 @@ def run_queue(job_dir: Path, request: dict) -> int:
             result_path=str(result_path),
         )
         status.write(status_path)
-        policy = request["shutdown_on"]
+        persistence_failed = any(
+            (
+                job_dir.parent
+                / document["aws_worker"]["job_id"]
+                / "s3-persistence-failed"
+            ).exists()
+            for document in configs
+        )
+        policy = "never" if persistence_failed else request["shutdown_on"]
+        if persistence_failed:
+            print(
+                "Queue shutdown deferred: artifacts or diagnostics could not be saved to S3",
+                flush=True,
+            )
         if (
             policy == "always"
             or (policy == "success" and not failed)

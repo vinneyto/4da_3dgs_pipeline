@@ -30,8 +30,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--template",
         type=Path,
         help=(
-            "Copy an existing run document and override its run identity and input. "
-            "Use with --experiment-name and --video"
+            "Copy an existing run document with a new --experiment-name. "
+            "Omit --video to preserve its input; stage and frame flags override the template"
         ),
     )
 
@@ -41,7 +41,7 @@ def build_parser() -> argparse.ArgumentParser:
     pipeline.add_argument(
         "--dataset",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=None,
         help="Run the 4DAnyone dataset stage",
     )
     pipeline.add_argument("--views-per-layer", type=int, default=24)
@@ -62,14 +62,14 @@ def build_parser() -> argparse.ArgumentParser:
     nerfstudio.add_argument(
         "--nerfstudio",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=None,
         help="Export synchronized static datasets from the completed 4DAnyone run",
     )
     nerfstudio.add_argument(
         "--nerfstudio-frames",
         type=int,
         nargs="+",
-        default=[60],
+        default=None,
     )
     nerfstudio.add_argument("--nerfstudio-device", default="cuda:0")
     nerfstudio.add_argument("--nerfstudio-source-experiment-name")
@@ -92,7 +92,7 @@ def build_parser() -> argparse.ArgumentParser:
     pipeline.add_argument(
         "--rerun",
         action=argparse.BooleanOptionalAction,
-        default=False,
+        default=None,
         help="Create an interactive Rerun recording after reconstruction",
     )
     pipeline.add_argument("--rerun-view-count", type=int, default=4)
@@ -109,7 +109,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     reconstruction = parser.add_argument_group("Static frame Splatfacto reconstruction")
     reconstruction.add_argument(
-        "--reconstruction", action=argparse.BooleanOptionalAction, default=False
+        "--reconstruction", action=argparse.BooleanOptionalAction, default=None
     )
     reconstruction.add_argument("--reconstruction-frames", type=int, nargs="+")
     add_profile_arguments(reconstruction, prefix="splatfacto-")
@@ -254,8 +254,6 @@ def _replace_artifact_source_experiment(
 def build_document_from_template(args: argparse.Namespace) -> dict[str, Any]:
     if not args.experiment_name:
         raise ValueError("--template requires --experiment-name")
-    if not args.video:
-        raise ValueError("--template requires --video")
 
     document = load_document(args.template)
     previous_experiment_name = document.get("experiment_name")
@@ -273,7 +271,12 @@ def build_document_from_template(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("template must use the schema-v6 aws_worker.bucket object")
 
     worker_payload["job_id"] = args.job_id or args.experiment_name
-    bucket_payload["video"] = args.video
+    if args.s3_video_path:
+        raise ValueError(
+            "--template uses --video for input overrides, not --s3-video-path"
+        )
+    if args.video is not None:
+        bucket_payload["video"] = args.video
     if args.bucket:
         bucket_payload["name"] = args.bucket
     _replace_artifact_source_experiment(
@@ -282,6 +285,26 @@ def build_document_from_template(args: argparse.Namespace) -> dict[str, Any]:
         experiment_name=args.experiment_name,
     )
 
+    # None means omitted: preserve template settings rather than CLI defaults.
+    dataset = document["pipeline"]["dataset"]
+    reconstruction = document["pipeline"]["reconstruction"]
+    artifacts = document["artifacts"]["dataset"]
+    for value, target, key in (
+        (args.dataset, dataset, "enabled"),
+        (args.reconstruction, reconstruction, "enabled"),
+        (args.reconstruction_frames, reconstruction["config"], "frames"),
+        (args.nerfstudio, artifacts["nerfstudio"], "enabled"),
+        (args.nerfstudio_frames, artifacts["nerfstudio"], "frames"),
+        (
+            args.nerfstudio_source_experiment_name,
+            artifacts["nerfstudio"],
+            "source_experiment_name",
+        ),
+        (args.rerun, artifacts["rerun"], "enabled"),
+    ):
+        if value is not None:
+            target[key] = value
+
     validate_run_settings(document)
     return document
 
@@ -289,6 +312,15 @@ def build_document_from_template(args: argparse.Namespace) -> dict[str, Any]:
 def build_document(args: argparse.Namespace) -> dict[str, Any]:
     if args.template:
         return build_document_from_template(args)
+    for name, default in {
+        "dataset": True,
+        "nerfstudio": True,
+        "nerfstudio_frames": [60],
+        "rerun": False,
+        "reconstruction": False,
+    }.items():
+        if getattr(args, name) is None:
+            setattr(args, name, default)
     if not args.experiment_name:
         raise ValueError("--experiment-name is required")
     if not args.video and not args.s3_video_path:

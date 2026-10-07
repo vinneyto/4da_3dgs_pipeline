@@ -129,9 +129,9 @@ Conda installation or GPU.
 
 ## Clone an existing run configuration
 
-Use a validated JSON document as a template when only the input and run identity
-change. All pipeline, artifact, AWS, notification, and shutdown
-settings are preserved. Artifact source references that pointed at the template
+Use a validated JSON document as a template with a new run identity. Omit
+`--video` to preserve the input. Pipeline, artifact, AWS, notification and shutdown
+settings are preserved unless explicitly overridden. Artifact source references that pointed at the template
 experiment are updated to the new experiment automatically.
 
 ```bash
@@ -150,6 +150,27 @@ recon-config \
 Pass `--force` only when the output file may be replaced deliberately. Use
 `--job-id` to override the default new job ID or `--bucket` to move the cloned
 run to another bucket.
+
+Template copies accept `--dataset`/`--no-dataset`,
+`--reconstruction`/`--no-reconstruction`, `--reconstruction-frames`,
+`--nerfstudio`/`--no-nerfstudio`, `--nerfstudio-frames`,
+`--nerfstudio-source-experiment-name`, and `--rerun`/`--no-rerun`.
+To reconstruct every frame from an existing 4DAnyone experiment:
+
+```bash
+recon-config \
+  --template config/leo-three-layers-rerun.json \
+  --output config/leo-three-layers-splatfacto-all.json \
+  --experiment-name leo_three_layers_72views_splatfacto_all_01 \
+  --no-dataset --reconstruction --nerfstudio \
+  --nerfstudio-frames $(seq 0 120) \
+  --nerfstudio-source-experiment-name leo_three_layers_72views_01 \
+  --no-rerun
+```
+
+`--reconstruction-frames` preserves an existing selection when omitted. A null
+selection in the source config trains all exported frames. Other generator
+options (such as training profile flags) do not override template settings.
 
 ## Configure a three-layer AWS run
 

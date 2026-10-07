@@ -85,6 +85,20 @@ Existing Conda prefixes are reused. The checker reports missing packages even
 when an environment contains only Python; its output does not contain the
 installer's failure reason. Configure-only does not create an installation log.
 
+Setup installs EGL/OpenGL libraries inside the Splatfacto Conda prefix. The
+checker imports Open3D and creates an empty point cloud to catch missing native
+libraries before training (including `libEGL.so.1` on headless SageMaker images).
+To repair an existing installation without rerunning the full setup:
+
+```bash
+conda install --prefix "$(dirname "$RECON_NERFSTUDIO_BIN")" \
+  -c conda-forge libegl libgl -y
+./scripts/check_environment.sh --require-cuda
+```
+
+Restart a failed worker with the same config and without `--force` to reuse
+completed pass checkpoints, including the exported Nerfstudio datasets.
+
 ## Environment boundary
 
 `PipelineEnvironment` (`src/recon_pipeline/environment.py`) reads machine

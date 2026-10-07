@@ -64,6 +64,17 @@ except Exception as error:
 sys.exit(0 if available else 2)
 """
 
+OPEN3D_PROBE = """
+import sys
+try:
+    import open3d
+    cloud = open3d.geometry.PointCloud()
+    print('Open3D=' + open3d.__version__ + ' native point-cloud import ready')
+except Exception as error:
+    print('Open3D import failed: ' + str(error))
+    sys.exit(1)
+"""
+
 
 def configure(env_file: Path, repo: Path) -> None:
     saved = {}
@@ -326,6 +337,9 @@ def check_environment(*, require_cuda: bool = False) -> dict:
                 values.get("RECON_PYTHON_VERSION", ""),
             ],
         )
+        if name == "Splatfacto":
+            # find_spec alone cannot detect missing native libraries such as EGL.
+            probe(name + " Open3D", [str(python), "-c", OPEN3D_PROBE])
         if name != "Splatfacto Rerun":
             # Torch import/allocation checks driver access, but never compiles gsplat.
             probe(

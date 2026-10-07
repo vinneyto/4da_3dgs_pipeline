@@ -95,6 +95,9 @@ fi
 stage "Splatfacto CUDA toolkit and C++ compiler"
 conda install --prefix "$SPLATFACTO_ENV" -y -c conda-forge -c nvidia \
   "cuda-toolkit=$RECON_CUDA_VERSION" gxx_linux-64=11 ninja
+# Open3D is imported by Nerfstudio's point-cloud loader, even without a GUI.
+stage "Splatfacto Open3D EGL/OpenGL libraries"
+conda install --prefix "$SPLATFACTO_ENV" -y -c conda-forge libegl libgl
 stage "Splatfacto Conda activation"
 set +u
 conda activate "$SPLATFACTO_ENV"

@@ -460,6 +460,7 @@ def test_setup_conda_hooks_allow_unset_variables_but_preserve_failures(
     bootstrap.write_text(
         'printf "bootstrap optional=%s\\n" "$ADDR2LINE"\n'
         "conda() {\n"
+        '  printf "conda arguments: %s\\n" "$*"\n'
         '  if [[ "$1" == activate ]]; then\n'
         '    printf "activation optional=%s\\n" "$ADDR2LINE"\n'
         f"    return {activation_status}\n"
@@ -490,6 +491,7 @@ def test_setup_conda_hooks_allow_unset_variables_but_preserve_failures(
     )
     log = log_file.read_text()
     assert "activation optional=" in log
+    assert "-c conda-forge libegl libgl" in log
     assert "unbound variable" not in log
     assert completed.returncode == (activation_status or 73)
     failed_stage = (
@@ -498,3 +500,39 @@ def test_setup_conda_hooks_allow_unset_variables_but_preserve_failures(
         else "Splatfacto Python packaging tools"
     )
     assert f'setup stopped at "{failed_stage}"' in log
+
+
+@pytest.mark.parametrize("broken", [False, True])
+def test_open3d_probe_checks_native_import_without_traceback(tmp_path, broken):
+    from recon_pipeline.environment_cli import OPEN3D_PROBE
+
+    module = tmp_path / "open3d.py"
+    module.write_text(
+        "raise ImportError('libEGL.so.1: cannot open shared object file')\n"
+        if broken
+        else "__version__ = 'fixture'\nclass geometry:\n    class PointCloud:\n        pass\n"
+    )
+    completed = subprocess.run(
+        [sys.executable, "-S", "-c", OPEN3D_PROBE],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == int(broken)
+    assert not completed.stderr
+    assert (
+        "libEGL.so.1" if broken else "native point-cloud import ready"
+    ) in completed.stdout
+
+
+def test_checker_reports_missing_open3d_native_library(pipeline_environment):
+    python = pipeline_environment.nerfstudio_bin / "python"
+    python.parent.mkdir(parents=True)
+    python.write_text(
+        "#!/bin/bash\necho 'libEGL.so.1: cannot open shared object file'\nexit 1\n"
+    )
+    python.chmod(0o755)
+    report = check_environment()
+    check = next(c for c in report["checks"] if c["check"] == "Splatfacto Open3D")
+    assert check["status"] == "FAIL"
+    assert "libEGL.so.1" in check["detail"]

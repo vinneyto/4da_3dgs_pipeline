@@ -39,6 +39,7 @@ from .recovery import (
 )
 from .passes.upload_artifacts import S3UploadArtifactsPass
 from .persistence import S3PersistenceObserver, S3DiagnosticsFinalizer
+from .cloudwatch import CloudWatchFlushFinalizer
 
 
 def required_source_experiments(
@@ -69,6 +70,7 @@ def build_aws_pipeline(
     status: JobStatus,
     *,
     force: bool = False,
+    log_session=None,
 ) -> Pipeline:
     passes = [AwsPreflightPass(worker, config)]
     if config.dataset_enabled:
@@ -121,12 +123,17 @@ def build_aws_pipeline(
         RuntimeMonitoringObserver(worker),
     ]
     finalizers = [SageMakerShutdownFinalizer(worker)]
+    if log_session is not None:
+        observers.insert(0, log_session)
+        finalizers.insert(0, CloudWatchFlushFinalizer(log_session))
     store = JsonPassCheckpointStore(
         config.experiment_dir / ".recon-pipeline/pass-state.json",
         config.experiment_name,
     )
     if worker.upload_results:
-        persistence = S3PersistenceObserver(worker, config, job_dir)
+        persistence = S3PersistenceObserver(
+            worker, config, job_dir, log_session=log_session
+        )
         observers.append(persistence)
         finalizers.insert(0, S3DiagnosticsFinalizer(persistence))
         store = RecoveryCheckpointStore(worker, config, uploads)

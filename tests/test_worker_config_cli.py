@@ -81,6 +81,28 @@ def test_generator_writes_a_valid_worker_document(tmp_path: Path) -> None:
     assert worker.local_video_path == tmp_path / "data/input/leo.MOV"
 
 
+def test_cloudwatch_config_survives_template_and_can_be_overridden(tmp_path):
+    source = tmp_path / "source.json"
+    main(arguments(source) + ["--cloudwatch-log-group", "/recon-pipeline/original"])
+    _, worker = load_aws_worker_config(source)
+    assert worker.cloudwatch.log_group == "/recon-pipeline/original"
+    for group in (None, "/recon-pipeline/override"):
+        target = tmp_path / ("copy" if group is None else "override")
+        args = [
+            "--template",
+            str(source),
+            "--output",
+            str(target),
+            "--experiment-name",
+            "new-experiment",
+        ]
+        if group:
+            args += ["--cloudwatch-log-group", group]
+        main(args)
+        _, worker = load_aws_worker_config(target)
+        assert worker.cloudwatch.log_group == (group or "/recon-pipeline/original")
+
+
 def test_generator_refuses_to_replace_a_document_without_force(tmp_path: Path) -> None:
     output = tmp_path / "run.json"
     output.write_text("do not replace")

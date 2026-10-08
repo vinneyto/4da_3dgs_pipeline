@@ -635,8 +635,9 @@ outputs owned by the pass being rerun.
 
 ### Cloud status and failure reports
 
-The worker uploads status, its input config snapshot, and recent log tails at
-startup and every 60 seconds. Log tails are limited to 1 MiB per file: the
+The worker uploads status and its input config snapshot at startup and every
+60 seconds. Without CloudWatch logging, it also uploads recent log tails.
+Log tails are limited to 1 MiB per file: the
 pipeline log and up to three recent operation logs. Small status updates do
 not retransmit artifact bundles. Literal Telegram tokens are redacted in
 config snapshots; environment variable names are preserved.
@@ -644,19 +645,22 @@ config snapshots; environment variable names are preserved.
 The latest status is at
 `runs/<experiment>/.recon-pipeline/status.json` (using your configured runs
 prefix). It points to an attempt directory containing `report.json`,
-`status.json`, `request.json`, `job/pipeline.log`, and operation logs under
-`logs/`. Attempt paths are unique, so a restart preserves earlier reports.
+`status.json`, and `request.json`. Without healthy CloudWatch delivery, it also
+contains `job/pipeline.log` and operation logs under `logs/`. Attempt paths are
+unique, so a restart preserves earlier reports.
 The final report includes completed passes, durations, the failed pass ID,
 exception type and message, full traceback, command, exit code, and captured
 output tail where available. Empty exception messages use their representation.
 
 Before applying either a single-run or queue shutdown policy, the worker saves
-the final report and full logs. If an artifact upload or final diagnostics
-upload fails, managed shutdown is deferred to preserve the local copy. A queue
+the final report and flushes logs to CloudWatch, or saves full logs to S3 when
+CloudWatch is disabled or unavailable. If an artifact upload, final diagnostics
+upload, or enabled CloudWatch delivery fails, managed shutdown is deferred to
+preserve the local copy. A queue
 still continues to its next experiment, then defers shutdown if any experiment
 has unsaved data. Fix S3 access and restart the affected experiment to retry.
-Setting `upload_results: false` disables cloud recovery, reports and these
-shutdown protections; local checkpoints remain available.
+Setting `upload_results: false` disables S3 recovery, reports and S3 shutdown
+protections; local checkpoints and enabled CloudWatch logging remain available.
 
 Completed committed frames survive disk/VM loss. A forced termination can
 interrupt the current computation or upload; that unfinished frame is retrained
@@ -664,6 +668,65 @@ after restoration, rather than resumed from an intermediate training iteration.
 A hard kill cannot guarantee a final failure report, but the latest heartbeat
 and previously committed outputs remain in S3. Container deployment itself is
 outside this change.
+
+### CloudWatch Logs
+
+Enable logging in an existing log group for a single experiment or every
+experiment in a sequential queue:
+
+```bash
+recon-aws-worker start \
+  --config config/first.json \
+  --config config/second.json \
+  --queue-id experiments \
+  --shutdown-on always \
+  --cloudwatch-log-group "$CP_4DA_LOG_GROUP"
+
+aws logs tail "$CP_4DA_LOG_GROUP" \
+  --region "$CP_AWS_REGION" --since 10m --follow --format short
+```
+
+The flag overrides each queued config's logging settings in the request snapshot;
+source files stay unchanged. Alternatively, add this optional block to
+`aws_worker` (schema 7 stays compatible):
+
+```json
+"cloudwatch": {
+  "enabled": true,
+  "log_group": "/recon-pipeline/my-deployment"
+}
+```
+
+`recon-config --cloudwatch-log-group` supports both new configurations and
+template copies. A template's existing CloudWatch settings are preserved unless
+overridden. Logging is disabled when the block is absent or `enabled` is false.
+
+Each worker attempt writes to `<experiment>/<attempt-id>`. The worker sends
+stdout, stderr, subprocess output and structured lifecycle events, including
+pass IDs and exception tracebacks. Utilities keep their independent CLI and
+stdout/stderr contracts. The queue coordinator retains its local summary; each
+experiment has its own CloudWatch stream. With S3 reporting enabled, both the
+attempt report and latest status include `cloudwatch_logs`, identifying region,
+group, stream and a console link. Local operation logs also remain available;
+logs within an artifact bundle are archived along with that bundle.
+
+Provision the log group and retention externally. The SageMaker execution role
+needs only `logs:CreateLogStream` and `logs:PutLogEvents` on
+`arn:aws:logs:<region>:<account>:log-group:<group>:log-stream:*`. The worker
+does not create groups, change retention, or describe streams. Its first send
+checks access before expensive computations start. Existing worker installations
+already include boto3; no CloudWatch agent is needed.
+
+Lines are spooled locally and sent every five seconds, in batches within AWS's
+byte, event-count and timestamp-span limits. Acknowledged offsets are recorded
+only after acceptance; pending attempts retry when the same local job restarts.
+Delivery is at least once: an ambiguous network response can cause duplicate
+events. CloudWatch outages do not interrupt computations, but unsent logs prevent
+managed shutdown, including at the end of a queue. S3 diagnostics fall back to
+full local logs when CloudWatch flushing fails. A forced VM/disk loss can still
+lose unsent lines; buffered logging cannot guarantee delivery after a hard kill.
+CloudWatch also rejects events outside its accepted time window, so retry an
+outage promptly. Configured Telegram tokens are redacted in the cloud stream.
 
 ## Stop
 

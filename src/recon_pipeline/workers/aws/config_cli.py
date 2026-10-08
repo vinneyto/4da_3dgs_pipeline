@@ -134,6 +134,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--bucket", help="Required with --video; inferred for legacy S3 URIs"
     )
     aws.add_argument("--region", default="us-east-1")
+    aws.add_argument(
+        "--cloudwatch-log-group",
+        help="Stream worker logs to an existing CloudWatch log group",
+    )
     aws.add_argument("--input-prefix", default="input")
     aws.add_argument("--models-prefix", default="models")
     aws.add_argument("--runs-prefix", default="runs")
@@ -271,6 +275,8 @@ def build_document_from_template(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("template must use the schema-v6 aws_worker.bucket object")
 
     worker_payload["job_id"] = args.job_id or args.experiment_name
+    if args.cloudwatch_log_group is not None:
+        worker_payload["cloudwatch"] = {"log_group": args.cloudwatch_log_group}
     if args.s3_video_path:
         raise ValueError(
             "--template uses --video for input overrides, not --s3-video-path"
@@ -466,6 +472,8 @@ def build_document(args: argparse.Namespace) -> dict[str, Any]:
             },
         },
     }
+    if args.cloudwatch_log_group is not None:
+        document["aws_worker"]["cloudwatch"] = {"log_group": args.cloudwatch_log_group}
     validate_run_settings(document)
     return document
 

@@ -14,6 +14,12 @@ class SageMakerShutdownFinalizer:
         self.worker = worker
 
     def run(self, context: PipelineContext, outcome: PipelineOutcome) -> None:
+        log_session = context.values.get("cloudwatch_session")
+        if log_session is not None:
+            log_session.flush_before_shutdown(context)
+        if context.values.get("cloudwatch_persistence_failed"):
+            print("Shutdown deferred: CloudWatch logs remain in the local retry spool", flush=True)
+            return
         if context.values.get("s3_persistence_failed"):
             print(
                 "Shutdown deferred: artifacts or diagnostics could not be saved to S3",

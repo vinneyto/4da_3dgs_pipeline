@@ -36,10 +36,17 @@ def exception_report(error):
 class S3PersistenceObserver(PipelineObserver):
     interval_seconds = 60
 
-    def __init__(self, worker, config, job_dir):
+    def __init__(self, worker, config, job_dir, *, log_session=None):
         self.worker, self.config, self.job_dir = worker, config, Path(job_dir)
+        self.log_session = log_session
         self.attempt = (
-            datetime.now(UTC).strftime("%Y%m%dT%H%M%S") + "-" + uuid.uuid4().hex[:12]
+            log_session.attempt
+            if log_session is not None
+            else (
+                datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
+                + "-"
+                + uuid.uuid4().hex[:12]
+            )
         )
         self.prefix = "/".join(
             filter(None, (worker.runs_prefix, config.experiment_name))
@@ -79,6 +86,8 @@ class S3PersistenceObserver(PipelineObserver):
     def _save_report(self):
         with self.lock:
             self.document["updated_at"] = datetime.now(UTC).isoformat()
+            if self.log_session is not None:
+                self.document["cloudwatch_logs"] = self.log_session.describe()
             self.report_path.parent.mkdir(parents=True, exist_ok=True)
             temporary = self.report_path.with_suffix(".tmp")
             temporary.write_text(json.dumps(self.document, indent=2) + "\n")
@@ -103,6 +112,12 @@ class S3PersistenceObserver(PipelineObserver):
                 "--report",
                 str(self.report_path),
                 *(["--full"] if full else []),
+                *(
+                    ["--skip-logs"]
+                    if self.log_session is not None
+                    and not self.log_session.describe()["last_error"]
+                    else []
+                ),
             ],
             context,
         )
@@ -122,6 +137,8 @@ class S3PersistenceObserver(PipelineObserver):
 
     def finish(self, context, outcome):
         self.close()
+        if self.log_session is not None:
+            self.log_session.flush_before_shutdown(context)
         with self.lock:
             self.document["state"] = (
                 "cancelled"

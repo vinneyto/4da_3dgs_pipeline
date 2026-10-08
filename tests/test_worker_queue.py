@@ -198,8 +198,11 @@ def test_queue_cli_accepts_multiple_configs_and_management_id():
         assert args.queue_id == "batch" and args.config is None
 
 
-def test_queue_continues_but_defers_shutdown_after_failed_s3_persistence(
-    configs, monkeypatch
+@pytest.mark.parametrize(
+    "marker", ["s3-persistence-failed", "cloudwatch-persistence-failed"]
+)
+def test_queue_continues_but_defers_shutdown_after_failed_persistence(
+    configs, monkeypatch, marker
 ):
     job, request = queue.build_start_request(configs, "always")
     job.prepare(request)
@@ -211,7 +214,7 @@ def test_queue_continues_but_defers_shutdown_after_failed_s3_persistence(
         state = "failed" if child.job_id == "run-0" else "succeeded"
         JobStatus(job_id=child.job_id, state=state).write(child.status_path)
         if state == "failed":
-            (child.root / "s3-persistence-failed").touch()
+            (child.root / marker).touch()
         return int(state == "failed")
 
     monkeypatch.setattr(queue, "_run_child", run_child)
@@ -222,3 +225,26 @@ def test_queue_continues_but_defers_shutdown_after_failed_s3_persistence(
     )
     assert queue.run_queue(job.root, request) == 1
     assert calls == ["run-0", "run-1", "run-2"]
+
+
+def test_cloudwatch_cli_override_applies_to_all_configs_without_editing_files(configs):
+    before = [p.read_text() for p in configs]
+    args = build_parser().parse_args(
+        [
+            "start",
+            "--config",
+            str(configs[0]),
+            "--config",
+            str(configs[1]),
+            "--cloudwatch-log-group",
+            "/recon-pipeline/test",
+        ]
+    )
+    _, request = queue.build_start_request(
+        args.config, cloudwatch_log_group=args.cloudwatch_log_group
+    )
+    assert all(
+        d["aws_worker"]["cloudwatch"] == {"log_group": "/recon-pipeline/test"}
+        for d in request["configs"]
+    )
+    assert before == [p.read_text() for p in configs]

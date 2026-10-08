@@ -24,7 +24,18 @@ def redact(value):
     return value
 
 
-def snapshot(*, bucket, prefix, job_dir, root, report, region, full=False, client=None):
+def snapshot(
+    *,
+    bucket,
+    prefix,
+    job_dir,
+    root,
+    report,
+    region,
+    full=False,
+    skip_logs=False,
+    client=None,
+):
     client = _client(region, client)
     prefix = normalize_prefix(prefix)
     report = Path(report)
@@ -41,6 +52,8 @@ def snapshot(*, bucket, prefix, job_dir, root, report, region, full=False, clien
     )
     if document.get("error"):
         current["error"] = document["error"]
+    if document.get("cloudwatch_logs"):
+        current["cloudwatch_logs"] = document["cloudwatch_logs"]
     put_json(client, bucket, prefix + "status.json", current)
     put_json(
         client, bucket, document["run_prefix"] + "/.recon-pipeline/status.json", current
@@ -53,6 +66,8 @@ def snapshot(*, bucket, prefix, job_dir, root, report, region, full=False, clien
             prefix + "request.json",
             redact(json.loads(request.read_text())),
         )
+    if skip_logs:
+        return {"s3_uri": f"s3://{bucket}/{prefix}", "full_logs": False}
     logs = list(Path(root).rglob("*.log")) if Path(root).exists() else []
     if not full:
         logs = sorted(logs, key=lambda p: p.stat().st_mtime)[-3:]
@@ -83,6 +98,11 @@ def main(argv=None):
     p.add_argument("--root", type=Path, required=True)
     p.add_argument("--report", type=Path, required=True)
     p.add_argument("--full", action="store_true")
+    p.add_argument(
+        "--skip-logs",
+        action="store_true",
+        help="Save status and reports only; logs are streamed separately",
+    )
     a = p.parse_args(argv)
     run_operation(
         lambda: snapshot(
@@ -93,6 +113,7 @@ def main(argv=None):
             report=a.report,
             region=a.region,
             full=a.full,
+            skip_logs=a.skip_logs,
         )
     )
 

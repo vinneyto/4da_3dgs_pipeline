@@ -443,7 +443,7 @@ class AwsNotificationObserver(QueuedPipelineObserver):
             lines = [
                 event.pass_name,
                 f"Duration: {_format_duration(event.duration_seconds)}",
-                f"Error: {event.error}",
+                f"Error: {str(event.error) or repr(event.error)}",
                 self._resources(),
             ]
             if output:

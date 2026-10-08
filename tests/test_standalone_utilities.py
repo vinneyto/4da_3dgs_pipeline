@@ -41,6 +41,9 @@ UTILITY_MODULES = [
     "utilities.storage.s3.sync_models",
     "utilities.storage.s3.restore_experiment",
     "utilities.storage.s3.upload_results",
+    "utilities.storage.s3.publish_artifacts",
+    "utilities.storage.s3.recover_run",
+    "utilities.storage.s3.upload_diagnostics",
     "utilities.artefacts.manifest.write",
 ]
 
@@ -365,16 +368,18 @@ def test_aws_passes_forward_operation_arguments_and_read_stdout(monkeypatch, tmp
 
     def restore(**options):
         assert options["bucket"] == worker.bucket_name
-        assert options["prefix"] == "runs/source"
+        assert options["prefix"] == "runs/source/4danyone"
         assert options["require_objects"]
-        generation = options["destination"] / "4danyone"
-        assert not generation.exists()
-        generation.mkdir(parents=True)
+        generation = options["destination"]
+        assert not (generation / "stale.txt").exists()
+        generation.mkdir(parents=True, exist_ok=True)
         for name in ("metadata.json", "cameras.json"):
             (generation / name).touch()
         return 3, 3
 
     monkeypatch.setattr(restore_experiment, "sync_prefix", restore)
+    monkeypatch.setattr(restore_experiment, "_client", lambda region: object())
+    monkeypatch.setattr(restore_experiment, "read_json", lambda *args: None)
     monkeypatch.setattr(
         upload_results,
         "delete_prefix",

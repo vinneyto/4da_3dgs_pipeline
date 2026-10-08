@@ -12,20 +12,31 @@ from pathlib import Path
 
 from recon_pipeline.run_document import strip_environment
 from .aws import stop_sagemaker_app
-from .config import load_aws_worker_config, load_document, SageMakerAppConfig
+from .config import (
+    CloudWatchConfig,
+    load_aws_worker_config,
+    load_document,
+    SageMakerAppConfig,
+)
 from .job import AwsBackgroundJob
 from .status import JobStatus, utc_now
 
 
-def build_start_request(paths, shutdown_on=None, queue_id=None, force=False):
+def build_start_request(
+    paths, shutdown_on=None, queue_id=None, force=False, *, cloudwatch_log_group=None
+):
     if not paths:
         raise ValueError("At least one config is required")
+    if cloudwatch_log_group is not None:
+        CloudWatchConfig(cloudwatch_log_group)
     requests, workers = [], []
     for path in paths:
         _, worker = load_aws_worker_config(path)
         document = strip_environment(load_document(path))
         if shutdown_on is not None:
             document["aws_worker"]["shutdown_on"] = shutdown_on
+        if cloudwatch_log_group is not None:
+            document["aws_worker"]["cloudwatch"] = {"log_group": cloudwatch_log_group}
         document["force"] = force
         requests.append(document)
         workers.append(worker)
@@ -180,7 +191,17 @@ def run_queue(job_dir: Path, request: dict) -> int:
             result_path=str(result_path),
         )
         status.write(status_path)
-        policy = request["shutdown_on"]
+        persistence_failed = any(
+            (job_dir.parent / document["aws_worker"]["job_id"] / marker).exists()
+            for document in configs
+            for marker in ("s3-persistence-failed", "cloudwatch-persistence-failed")
+        )
+        policy = "never" if persistence_failed else request["shutdown_on"]
+        if persistence_failed:
+            print(
+                "Queue shutdown deferred: artifacts, diagnostics or CloudWatch logs remain unsaved",
+                flush=True,
+            )
         if (
             policy == "always"
             or (policy == "success" and not failed)

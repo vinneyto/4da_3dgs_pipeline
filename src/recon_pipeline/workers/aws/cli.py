@@ -84,6 +84,10 @@ def build_parser() -> argparse.ArgumentParser:
             )
         if name == "start":
             command.add_argument(
+                "--cloudwatch-log-group",
+                help="Enable CloudWatch Logs in this group for every queued config; source files stay unchanged",
+            )
+            command.add_argument(
                 "--queue-id",
                 help="Defaults to queue-<first job ID> for multiple configs",
             )
@@ -140,7 +144,11 @@ def main(argv=None) -> None:
         from .queue import build_start_request
 
         job, request = build_start_request(
-            args.config, args.shutdown_on, args.queue_id, args.force
+            args.config,
+            args.shutdown_on,
+            args.queue_id,
+            args.force,
+            cloudwatch_log_group=args.cloudwatch_log_group,
         )
         status = job.start(request)
         _print_status(status)

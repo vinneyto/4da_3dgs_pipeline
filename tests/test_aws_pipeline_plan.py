@@ -43,13 +43,20 @@ def test_aws_builder_creates_explicit_full_execution_plan(tmp_path: Path) -> Non
         "s3-download-input",
         "s3-sync-models",
         "prepare-experiment",
+        "s3-upload:prepare-experiment",
         "fourdanyone-inference",
+        "s3-upload:fourdanyone-inference",
         "nerfstudio-export",
+        "s3-upload:nerfstudio-export",
         "rerun-export",
+        "s3-upload:rerun-export",
         "write-run-manifest",
-        "s3-upload-results",
+        "s3-upload:write-run-manifest",
     ]
-    assert [item.id for item in plan.finalizers] == ["sagemaker-shutdown"]
+    assert [item.id for item in plan.finalizers] == [
+        "s3-save-diagnostics",
+        "sagemaker-shutdown",
+    ]
 
 
 def test_artifact_only_plan_restores_shared_source_once(tmp_path: Path) -> None:
@@ -100,13 +107,19 @@ def test_reconstruction_plan_has_one_training_and_recording_pass_per_frame(tmp_p
         "s3-sync-models",
         "s3-restore-experiment:original",
         "prepare-experiment",
+        "s3-upload:prepare-experiment",
         "nerfstudio-export",
+        "s3-upload:nerfstudio-export",
         "splatfacto:frame_030",
+        "s3-upload:splatfacto:frame_030",
         "splatfacto-rerun:frame_030",
+        "s3-upload:splatfacto-rerun:frame_030",
         "splatfacto:frame_090",
+        "s3-upload:splatfacto:frame_090",
         "splatfacto-rerun:frame_090",
+        "s3-upload:splatfacto-rerun:frame_090",
         "write-run-manifest",
-        "s3-upload-results",
+        "s3-upload:write-run-manifest",
     ]
 
 

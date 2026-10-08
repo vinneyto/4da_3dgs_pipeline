@@ -4,7 +4,8 @@ import shutil
 from pathlib import Path
 from typing import Sequence
 from recon_pipeline.utilities._output import report_progress, run_operation
-from .operations import sync_prefix
+from .operations import sync_prefix, _client
+from .bundles import marker_key, read_json, restore_files
 from ._arguments import parser
 
 
@@ -18,13 +19,26 @@ def restore(args) -> dict:
         message = "Reusing source experiment from persistent storage"
     else:
         report_progress(0.0, "Restoring source experiment from S3")
-        found, downloaded = sync_prefix(
-            bucket=args.bucket,
-            prefix=args.prefix,
-            destination=args.destination,
-            region=args.region,
-            require_objects=True,
+        client = _client(args.region)
+        record = read_json(
+            client, args.bucket, marker_key(args.prefix, "fourdanyone-inference")
         )
+        if record is not None:
+            if record.get("experiment_name") != args.destination.name:
+                raise ValueError("Source artifact commit belongs to another experiment")
+            downloaded = restore_files(
+                client, args.bucket, args.prefix, args.destination, record
+            )
+            found = len(record["files"])
+        else:
+            # Legacy experiments have no commits; fetch only the required generation.
+            found, downloaded = sync_prefix(
+                bucket=args.bucket,
+                prefix=args.prefix.rstrip("/") + "/4danyone",
+                destination=generation,
+                region=args.region,
+                require_objects=True,
+            )
         message = "Source experiment restored"
     if not all(path.is_file() for path in required):
         raise FileNotFoundError(

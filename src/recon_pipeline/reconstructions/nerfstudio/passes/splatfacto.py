@@ -27,8 +27,13 @@ class SplatfactoPass:
     def run(self, context):
         datasets = context.require(NERFSTUDIO_DATASETS)
         dataset = next(
-            item["dataset_dir"] for item in datasets if item["frame"] == self.frame
+            (item["dataset_dir"] for item in datasets if item["frame"] == self.frame),
+            None,
         )
+        if dataset is None:
+            raise FileNotFoundError(
+                f"Nerfstudio export does not contain requested frame {self.frame}; available frames: {[item['frame'] for item in datasets]}"
+            )
         settings = self.config.reconstruction
         result = run_utility(
             "recon_pipeline.utilities.reconstructions.nerfstudio.splatfacto",

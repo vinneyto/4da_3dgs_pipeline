@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -20,6 +21,20 @@ from recon_pipeline.datasets.fourdanyone.config import (
 )
 
 VALID_SHUTDOWN_POLICIES = frozenset({"never", "success", "failure", "always"})
+
+
+@dataclass(frozen=True, slots=True)
+class CloudWatchConfig:
+    log_group: str
+    enabled: bool = True
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.log_group, str) or not re.fullmatch(
+            r"[.\-_/A-Za-z0-9#]{1,512}", self.log_group
+        ):
+            raise ValueError(
+                "cloudwatch.log_group must be a valid CloudWatch log group name"
+            )
 
 
 def load_document(path: Path) -> dict[str, Any]:
@@ -172,6 +187,7 @@ class AwsWorkerConfig:
     sns: SnsConfig | None
     sagemaker: SageMakerAppConfig
     telegram: TelegramConfig | None = None
+    cloudwatch: CloudWatchConfig | None = None
 
     def __post_init__(self) -> None:
         if self.shutdown_on not in VALID_SHUTDOWN_POLICIES:
@@ -180,6 +196,8 @@ class AwsWorkerConfig:
             raise ValueError("job_id must be a simple directory name")
         if isinstance(self.bucket, dict):
             object.__setattr__(self, "bucket", BucketConfig(**self.bucket))
+        if isinstance(self.cloudwatch, dict):
+            object.__setattr__(self, "cloudwatch", CloudWatchConfig(**self.cloudwatch))
 
     @property
     def jobs_dir(self) -> Path:
@@ -285,6 +303,11 @@ class AwsWorkerConfig:
             sns=SnsConfig(**sns_payload) if sns_payload else None,
             telegram=TelegramConfig(**telegram_payload) if telegram_payload else None,
             sagemaker=SageMakerAppConfig(**sagemaker_payload),
+            cloudwatch=(
+                CloudWatchConfig(**payload["cloudwatch"])
+                if payload.get("cloudwatch") is not None
+                else None
+            ),
         )
 
     @classmethod

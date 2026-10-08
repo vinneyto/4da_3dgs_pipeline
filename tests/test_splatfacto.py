@@ -1,4 +1,5 @@
 import json
+import os
 import shlex
 import subprocess
 import sys
@@ -80,6 +81,7 @@ root = Path(__file__).parent
 with (root / "calls.jsonl").open("a") as stream:
     stream.write(json.dumps({"tool": Path(__file__).name, "args": args}) + "\\n")
 if Path(__file__).name == "ns-train":
+    assert option("--logging.local-writer.max-log-size") == "0"
     assert option("--pipeline.model.background-color") == "random"
     assert option("--eval-mode") == "all"
     assert option("--pipeline.model.rasterize-mode") == "classic"
@@ -175,7 +177,7 @@ def test_training_cli_uses_profile_and_only_protocol_on_stdout(tmp_path, binarie
     assert result["training_profile"] == asdict(TrainingProfile())
     assert result["full_splat_count"] == 8
     assert validate_ply(Path(result["splat_ply"]), 2) == 8
-    assert any("iteration 7" in event.get("message", "") for event in events)
+    assert not any("iteration 7" in event.get("message", "") for event in events)
     assert "library diagnostic" in completed.stderr
     assert Path(result["dataparser_transform"]).is_file()
     again = subprocess.run(command, capture_output=True, text=True)
@@ -313,3 +315,116 @@ def test_reconstruction_selection_must_be_exported_frames(tmp_path):
             reconstruction=SplatfactoConfig(enabled=True),
             nerfstudio=NerfstudioArtifactConfig(enabled=False),
         )
+
+
+def conversion_command(tmp_path, binaries, formats, converter):
+    return [
+        sys.executable,
+        "-m",
+        "recon_pipeline.utilities.reconstructions.nerfstudio.splatfacto",
+        "--dataset",
+        str(dataset(tmp_path / "source")),
+        "--output",
+        str(tmp_path / "result"),
+        "--nerfstudio-bin",
+        str(binaries),
+        "--splat-transform",
+        str(converter),
+        "--export-formats",
+        *formats,
+    ]
+
+
+@pytest.fixture
+def converter(tmp_path):
+    executable = tmp_path / "converter tools/splat-transform"
+    executable.parent.mkdir()
+    executable.write_text(f"#!{sys.executable}\n" + """
+import os, sys
+from pathlib import Path
+if os.environ.get("FAKE_CONVERT_FAIL"):
+    print("conversion failed", file=sys.stderr)
+    sys.exit(3)
+assert sys.argv[1:4] == ["--quiet", "--gpu", "cpu"]
+assert Path(sys.argv[4]).is_file()
+if not os.environ.get("FAKE_CONVERT_NO_OUTPUT"):
+    Path(sys.argv[5]).write_bytes(b"converted fixture")
+""")
+    executable.chmod(0o755)
+    return executable
+
+
+def test_multiple_delivery_formats_retain_source_and_manifest(
+    tmp_path, binaries, converter
+):
+    command = conversion_command(
+        tmp_path, binaries, ["compressed_ply", "spz", "sog"], converter
+    )
+    completed = subprocess.run(command, capture_output=True, text=True)
+    assert completed.returncode == 0, completed.stderr
+    result = json.loads(completed.stdout.splitlines()[-1])["data"]
+    assert result["export_formats"] == ["compressed_ply", "spz", "sog"]
+    assert set(result["exported_artifacts"]) == set(result["export_formats"])
+    assert {Path(p).name for p in result["exported_artifacts"].values()} == {
+        "splat.compressed.ply",
+        "splat.spz",
+        "splat.sog",
+    }
+    assert all(Path(p).stat().st_size for p in result["exported_artifacts"].values())
+    assert validate_ply(Path(result["splat_ply"]), 2) == 8
+    assert (
+        json.loads((tmp_path / "result/experiment_manifest.json").read_text()) == result
+    )
+
+
+@pytest.mark.parametrize("flag", ["FAKE_CONVERT_FAIL", "FAKE_CONVERT_NO_OUTPUT"])
+def test_failed_conversion_does_not_complete_frame(tmp_path, binaries, converter, flag):
+    command = conversion_command(tmp_path, binaries, ["ply", "spz"], converter)
+    completed = subprocess.run(
+        command, capture_output=True, text=True, env={**os.environ, flag: "1"}
+    )
+    assert completed.returncode != 0
+    assert not (tmp_path / "result/experiment_manifest.json").exists()
+    assert not any(
+        json.loads(line).get("event") == "result"
+        for line in completed.stdout.splitlines()
+    )
+
+
+def test_missing_converter_fails_before_training(tmp_path, binaries):
+    command = conversion_command(tmp_path, binaries, ["spz"], tmp_path / "missing")
+    completed = subprocess.run(command, capture_output=True, text=True)
+    assert completed.returncode != 0 and "Install splat-transform" in completed.stderr
+    assert not (binaries / "calls.jsonl").exists()
+
+
+@pytest.mark.parametrize("formats", [[], ["ply", "ply"], ["splat"], "spz", [None]])
+def test_export_formats_are_validated(formats):
+    with pytest.raises(ValueError, match="export_formats"):
+        SplatfactoConfig(export_formats=formats)
+
+
+def test_training_progress_is_integer_and_raw_rows_stay_only_in_file(
+    tmp_path, binaries
+):
+    trainer = binaries / "ns-train"
+    trainer.write_text(
+        trainer.read_text().replace(
+            'print("7 (0.01%)  training progress")',
+            'for step in range(0, 60001, 60): print(f"{step} ({step / 600:.1f}%) training progress")',
+        )
+    )
+    command = conversion_command(tmp_path, binaries, ["ply"], tmp_path / "unused")
+    completed = subprocess.run(command, capture_output=True, text=True)
+    assert completed.returncode == 0, completed.stderr
+    events = [json.loads(line) for line in completed.stdout.splitlines()]
+    fractions = [event["fraction"] for event in events if event["event"] == "progress"]
+    assert len(fractions) <= 101
+    assert len(set(fractions)) == len(fractions)
+    assert all(abs(f * 100 - round(f * 100)) < 1e-8 for f in fractions)
+    assert fractions[0] == 0 and fractions[-1] == 1
+    assert "training progress" not in completed.stderr
+    assert "library diagnostic" in completed.stderr
+    assert (tmp_path / "result/logs/train.log").read_text().count(
+        "training progress"
+    ) == 1001

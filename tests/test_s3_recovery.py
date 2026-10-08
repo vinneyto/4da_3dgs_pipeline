@@ -681,3 +681,59 @@ def test_source_experiment_restores_verified_generation_bundle(tmp_path, monkeyp
     assert result["downloaded"] == 3
     assert (destination / "4danyone/view_000.mp4").read_bytes() == b"view_000.mp4"
     assert not (destination / "unrelated.ply").exists()
+
+
+def test_default_ply_exports_keep_old_frame_signature(tmp_path):
+    settings = make_pipeline_config(tmp_path).settings_dict()
+    current = fingerprint(
+        "splatfacto:frame_000", settings, ("bucket", "input", "video")
+    )
+    settings["reconstruction"].pop("export_formats")
+    assert (
+        fingerprint("splatfacto:frame_000", settings, ("bucket", "input", "video"))
+        == current
+    )
+    settings["reconstruction"]["export_formats"] = ["ply", "spz"]
+    assert (
+        fingerprint("splatfacto:frame_000", settings, ("bucket", "input", "video"))
+        != current
+    )
+
+
+def test_converted_artifacts_publish_and_recover_with_rebased_manifest_paths(tmp_path):
+    options, plan = fixture_bundle(tmp_path)
+    exports = options["root"] / "splatfacto/frame_000/exports"
+    exports.mkdir()
+    artifacts = {}
+    for fmt, name in [
+        ("ply", "splat.ply"),
+        ("compressed_ply", "splat.compressed.ply"),
+        ("spz", "splat.spz"),
+        ("sog", "splat.sog"),
+    ]:
+        path = exports / name
+        path.write_bytes(fmt.encode())
+        artifacts[fmt] = str(path)
+    options["checkpoint"]["artifacts"]["trained"]["exported_artifacts"] = artifacts
+    bundles.publish(**options)
+    new_data = tmp_path / "other-machine"
+    root = new_data / "runs/example"
+    checkpoint_path = root / ".recon-pipeline/pass-state.json"
+    result = bundles.recover(
+        bucket="bucket",
+        prefix="runs/example",
+        root=root,
+        data_root=new_data,
+        plan=plan,
+        checkpoint_path=checkpoint_path,
+        region="region",
+        client=options["client"],
+    )
+    assert result == {"restored": 1, "downloaded": 6}
+    recovered = json.loads(checkpoint_path.read_text())["passes"][0]["artifacts"][
+        "trained"
+    ]["exported_artifacts"]
+    for fmt, original in artifacts.items():
+        expected = root / Path(original).relative_to(options["root"])
+        assert recovered[fmt] == str(expected)
+        assert expected.read_bytes() == fmt.encode()

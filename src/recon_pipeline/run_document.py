@@ -22,7 +22,8 @@ def strip_environment(document):
         from pathlib import Path
 
         dataset.setdefault("video", Path(dataset.pop("video_path")).name)
-    pipeline.get("reconstruction", {}).get("config", {}).pop("nerfstudio_bin", None)
+    for key in ("nerfstudio_bin", "splat_transform"):
+        pipeline.get("reconstruction", {}).get("config", {}).pop(key, None)
     rerun = (result.get("artifacts") or {}).get("reconstruction", {}).get("rerun")
     if isinstance(rerun, dict):
         rerun.pop("python", None)

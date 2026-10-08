@@ -538,3 +538,39 @@ def test_template_clone_preserves_nondefault_stages_until_explicit_override(tmp_
     assert not pipeline.reconstruction.enabled
     assert not pipeline.nerfstudio.enabled
     assert not pipeline.rerun.enabled
+
+
+def test_export_formats_are_generated_and_template_overrides_are_optional(tmp_path):
+    output = tmp_path / "run.json"
+    main(
+        [
+            *arguments(output),
+            "--reconstruction",
+            "--splatfacto-export-formats",
+            "ply",
+            "spz",
+        ]
+    )
+    assert load_aws_worker_config(output)[0].reconstruction.export_formats == (
+        "ply",
+        "spz",
+    )
+    for extra, expected in [
+        ([], ("ply", "spz")),
+        (["--splatfacto-export-formats", "sog"], ("sog",)),
+    ]:
+        target = tmp_path / (expected[-1] + ".json")
+        main(
+            [
+                "--template",
+                str(output),
+                "--output",
+                str(target),
+                "--experiment-name",
+                "clone",
+                *extra,
+            ]
+        )
+        assert (
+            load_aws_worker_config(target)[0].reconstruction.export_formats == expected
+        )

@@ -4,6 +4,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from recon_pipeline.utilities.reconstructions.nerfstudio._profile import TrainingProfile
+from recon_pipeline.utilities.reconstructions.nerfstudio._exports import (
+    validate_export_formats,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -11,9 +14,19 @@ class SplatfactoConfig(TrainingProfile):
     enabled: bool = False
     frames: tuple[int, ...] | None = None
     nerfstudio_bin: str | None = None
+    splat_transform: str | None = None
+    export_formats: tuple[str, ...] = ("ply",)
 
     def __post_init__(self):
         TrainingProfile.__post_init__(self)
+        object.__setattr__(
+            self, "export_formats", validate_export_formats(self.export_formats)
+        )
+        if (
+            self.splat_transform is not None
+            and not Path(self.splat_transform).is_absolute()
+        ):
+            raise ValueError("reconstruction.splat_transform must be absolute")
         if not isinstance(self.enabled, bool):
             raise TypeError("reconstruction.enabled must be a boolean")
         if (

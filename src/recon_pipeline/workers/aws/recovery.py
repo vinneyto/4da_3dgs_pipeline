@@ -38,6 +38,8 @@ def fingerprint(pass_id, settings, input_identity):
         training = dict(settings["reconstruction"])
         training.pop("frames", None)
         training.pop("enabled", None)
+        if training.get("export_formats") in (["ply"], ("ply",)):
+            training.pop("export_formats")
         base["training"] = training
         base["frame"] = pass_id.rsplit("_", 1)[-1]
         if pass_id.startswith("splatfacto-rerun:"):

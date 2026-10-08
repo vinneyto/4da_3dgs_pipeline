@@ -11,8 +11,12 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 
-from recon_pipeline.utilities._output import report_progress, run_operation
+from recon_pipeline.utilities._output import (
+    report_progress as emit_progress,
+    run_operation,
+)
 from ._profile import TrainingProfile, add_profile_arguments
+from ._exports import EXPORT_FILENAMES, validate_export_formats
 from .prepare_rgba import prepare
 
 
@@ -59,11 +63,11 @@ def run_logged(command, log: Path, env, progress=None):
         assert process.stdout is not None
         try:
             for line in process.stdout:
-                print(line, end="", file=sys.stderr, flush=True)
                 stream.write(line)
                 stream.flush()
-                if progress:
-                    progress(line)
+                # A callback may consume noisy training rows after reporting progress.
+                if progress is None or progress(line) is not False:
+                    print(line, end="", file=sys.stderr, flush=True)
         except BaseException:
             process.kill()
             raise
@@ -75,6 +79,23 @@ def run_logged(command, log: Path, env, progress=None):
 
 
 def reconstruct(args) -> dict:
+    last_progress = -1
+
+    def report_progress(fraction, message):
+        nonlocal last_progress
+        percent = int(fraction * 100 + 1e-8)
+        if percent > last_progress:
+            last_progress = percent
+            emit_progress(percent / 100, message)
+
+    formats = validate_export_formats(args.export_formats)
+    converter = None
+    if any(fmt != "ply" for fmt in formats):
+        converter = shutil.which(args.splat_transform)
+        if converter is None:
+            raise FileNotFoundError(
+                f"Install splat-transform with scripts/setup_environment.sh; missing {args.splat_transform}"
+            )
     profile = TrainingProfile(
         **{name: getattr(args, name) for name in TrainingProfile.__dataclass_fields__}
     )
@@ -119,7 +140,13 @@ def reconstruct(args) -> dict:
     logs.mkdir()
     env = {
         **os.environ,
-        "PATH": str(binaries) + os.pathsep + os.environ.get("PATH", ""),
+        "PATH": os.pathsep.join(
+            [
+                str(binaries),
+                *([str(Path(converter).parent)] if converter else []),
+                os.environ.get("PATH", ""),
+            ]
+        ),
         "MPLBACKEND": "Agg",
         "PYTHONUNBUFFERED": "1",
     }
@@ -138,6 +165,8 @@ def reconstruct(args) -> dict:
         str(profile.max_num_iterations),
         "--vis",
         "tensorboard",
+        "--logging.local-writer.max-log-size",
+        "0",  # Avoid terminal redraws, repeated headers and historical rows in logs.
         "--pipeline.model.background-color",
         "random",
         "--pipeline.model.rasterize-mode",
@@ -154,18 +183,19 @@ def reconstruct(args) -> dict:
             )
     command.extend(["nerfstudio-data", "--eval-mode", "all"])
     report_progress(0.05, "Training Splatfacto")
-    last_step = -1
 
     def training_progress(line):
-        nonlocal last_step
         plain = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", line).strip()
         match = re.match(r"^(\d+)\s+\([\d.]+%\)", plain)
-        if match and int(match[1]) > last_step:
-            last_step = int(match[1])
+        if match:
+            step = min(int(match[1]), profile.max_num_iterations)
+            percent = 5 + 85 * step // profile.max_num_iterations
             report_progress(
-                0.05 + 0.85 * min(last_step / profile.max_num_iterations, 1),
-                f"Splatfacto iteration {last_step}/{profile.max_num_iterations}",
+                percent / 100,
+                f"Splatfacto iteration {step}/{profile.max_num_iterations}",
             )
+            return False  # Full rows stay in train.log; stdout carries coarse progress.
+        return True
 
     run_logged(command, logs / "train.log", env, training_progress)
     run_root = output / "nerfstudio_outputs" / name / "splatfacto" / timestamp
@@ -193,7 +223,27 @@ def reconstruct(args) -> dict:
     )
     splat = output / "exports/splat.ply"
     count = validate_ply(splat, profile.sh_degree)
+    exported = {}
+    for index, fmt in enumerate(formats):
+        destination = output / "exports" / EXPORT_FILENAMES[fmt]
+        if fmt != "ply":
+            report_progress(
+                0.9 + (index + 1) / len(formats) * 0.09,
+                f"Converting Gaussian export to {fmt}",
+            )
+            run_logged(
+                [converter, "--quiet", "--gpu", "cpu", str(splat), str(destination)],
+                logs / f"convert-{fmt}.log",
+                env,
+            )
+            if not destination.is_file() or destination.stat().st_size == 0:
+                raise ValueError(
+                    f"splat-transform did not produce a non-empty export: {destination}"
+                )
+        exported[fmt] = str(destination)
     result = {
+        "export_formats": list(formats),
+        "exported_artifacts": exported,
         "dataset_dir": prepared["dataset_dir"],
         "source_dataset": str(dataset),
         "output_dir": str(output),
@@ -221,6 +271,14 @@ def main(argv=None):
     for name in ("dataset", "output", "nerfstudio-bin"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--experiment-name", default="splatfacto")
+    parser.add_argument(
+        "--export-formats", nargs="+", choices=EXPORT_FILENAMES, default=["ply"]
+    )
+    parser.add_argument(
+        "--splat-transform",
+        default="splat-transform",
+        help="Installed converter executable",
+    )
     parser.add_argument("--replace-existing", action="store_true")
     add_profile_arguments(parser)
     args = parser.parse_args(argv)

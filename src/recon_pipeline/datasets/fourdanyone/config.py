@@ -435,6 +435,7 @@ class FourDAnyoneConfig:
             payload.pop(name)
         payload["video"] = self.video_path.name
         payload["reconstruction"].pop("nerfstudio_bin")
+        payload["reconstruction"].pop("splat_transform")
         payload["reconstruction_rerun"].pop("python")
         return payload
 

@@ -47,6 +47,13 @@ class SplatfactoPass:
                 "--experiment-name",
                 f"{self.config.experiment_name}_frame_{self.frame:03d}",
                 "--replace-existing",
+                "--export-formats",
+                *settings.export_formats,
+                *(
+                    ["--splat-transform", settings.splat_transform]
+                    if settings.splat_transform
+                    else []
+                ),
                 *profile_arguments(settings),
             ],
             context,

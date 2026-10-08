@@ -9,6 +9,10 @@ from pathlib import Path
 from typing import Any, Sequence
 from urllib.parse import urlparse
 
+from recon_pipeline.utilities.reconstructions.nerfstudio._exports import (
+    EXPORT_FILENAMES,
+)
+
 from .config import load_document, validate_run_settings
 from recon_pipeline.run_document import SCHEMA_VERSION, strip_environment
 from recon_pipeline.utilities.reconstructions.nerfstudio._profile import (
@@ -112,6 +116,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--reconstruction", action=argparse.BooleanOptionalAction, default=None
     )
     reconstruction.add_argument("--reconstruction-frames", type=int, nargs="+")
+    reconstruction.add_argument(
+        "--splatfacto-export-formats", nargs="+", choices=EXPORT_FILENAMES
+    )
     add_profile_arguments(reconstruction, prefix="splatfacto-")
     reconstruction.add_argument(
         "--reconstruction-rerun", action=argparse.BooleanOptionalAction, default=False
@@ -299,6 +306,7 @@ def build_document_from_template(args: argparse.Namespace) -> dict[str, Any]:
         (args.dataset, dataset, "enabled"),
         (args.reconstruction, reconstruction, "enabled"),
         (args.reconstruction_frames, reconstruction["config"], "frames"),
+        (args.splatfacto_export_formats, reconstruction["config"], "export_formats"),
         (args.nerfstudio, artifacts["nerfstudio"], "enabled"),
         (args.nerfstudio_frames, artifacts["nerfstudio"], "frames"),
         (
@@ -383,6 +391,7 @@ def build_document(args: argparse.Namespace) -> dict[str, Any]:
                 "type": "nerfstudio_splatfacto",
                 "config": {
                     "frames": args.reconstruction_frames,
+                    "export_formats": args.splatfacto_export_formats or ["ply"],
                     **asdict(
                         TrainingProfile(
                             **{

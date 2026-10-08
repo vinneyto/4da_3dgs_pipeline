@@ -1,5 +1,25 @@
 # Reconstruction pipeline CLI
 
+## Documentation
+
+The Russian-language [VitePress documentation](https://vinneyto.github.io/4da_3dgs_pipeline/)
+covers architecture and data-flow diagrams, environment setup and checks, every
+run-config field, standalone CLI examples and the Python pass API. The site is
+published by `.github/workflows/docs.yml` after merging to `main`; select **GitHub
+Actions** in the repository's **Settings → Pages → Source** before its first deployment.
+
+Source: [`docs/`](docs/index.md). With Node.js 22+ and Python 3.11+:
+
+```bash
+npm ci
+npm run docs:reference  # refresh CLI/environment/profile tables after code changes
+npm run docs:check
+npm run docs:dev
+npm run docs:build
+```
+
+See [documentation maintenance and publishing](docs/contributing.md).
+
 ## Check an existing machine first
 
 After updating the repository, run this without changing your environment:

@@ -1,0 +1,18 @@
+{
+  "name": "4da-3dgs-pipeline-docs",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "docs:dev": "vitepress dev docs",
+    "docs:build": "vitepress build docs",
+    "docs:preview": "vitepress preview docs",
+    "docs:reference": "python3 scripts/generate_docs_reference.py",
+    "docs:check": "python3 scripts/generate_docs_reference.py --check"
+  },
+  "devDependencies": {
+    "vitepress": "1.6.4",
+    "vitepress-plugin-mermaid": "2.0.17",
+    "mermaid": "11.12.0"
+  }
+}

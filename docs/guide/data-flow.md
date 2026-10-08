@@ -1,55 +1,161 @@
+---
+aside: false
+---
+
 # Поток данных и хранение
 
 В обозначениях ниже `D=$RECON_DATA_ROOT`, `E=experiment_name`, `F=frame_NNN`, `R=aws_worker.bucket.runs_prefix`. По умолчанию `R=runs`. Локальные пути появляются из окружения машины; в run JSON их нет.
 
-## Вычислительный поток
+## Поток выполнения и сохранения
+
+Схема читается сверху вниз: имя над шагом — короткий идентификатор операции, стрелка — передаваемые или сохраняемые данные. Пути не включены в подписи; они приведены в [справочнике хранения](#локальная-структура). Широкую схему можно прокручивать горизонтально.
+
+`Worker` управляет порядком, `Утилиты` выполняют операции и записывают файлы. Блоки `opt` выполняются только при включённой функции. Сохранение результатов в S3 в схеме предполагает `upload_results=true`; при `false` остаются локальные файлы и checkpoints.
 
 ```mermaid
-flowchart TD
-  Input["S3 input/video"] --> Download["D/input/basename(video)"]
-  Models["S3 models/"] --> Cache["D/models/"]
-  Download --> Inference["4DAnyone → D/runs/E/4danyone/"]
-  Cache --> Inference
-  Source["S3 R/source/4danyone/"] --> Restore["D/runs/source/4danyone/"]
-  Inference --> Export["Экспорт выбранных временных кадров"]
-  Restore --> Export
-  Cache --> Export
-  Export --> Dataset["nerfstudio/F: images, masks, transforms.json"]
-  Dataset --> RGBA["splatfacto/F/dataset: RGBA-копия"]
-  RGBA --> Train["Nerfstudio: checkpoints + config.yml"]
-  Train --> PLY["splatfacto/F/exports/splat.ply"]
-  PLY --> Recording["Опциональная Rerun сцена"]
-  Inference --> DatasetRecording["Опциональная Rerun запись датасета"]
-  Restore --> DatasetRecording
-  Dataset --> Manifest["pipeline-result.json"]
-  PLY --> Manifest
-  Recording --> Manifest
-  DatasetRecording --> Manifest
+sequenceDiagram
+  participant W as Worker
+  participant U as Утилиты
+  participant L as Локальный диск
+  participant S as S3
+  participant C as CloudWatch
+
+  Note over W: nowrap: start
+  W->>L: Состояние задания
+  Note over W,L: Request, status и pipeline log
+
+  opt CloudWatch включён — во время всей работы
+    W->>L: Spool логов
+    W->>C: Логи попытки
+  end
+
+  opt Облачное восстановление включено
+    Note over W: nowrap: s3-recover-run
+    W->>U: Восстановить текущий план
+    S->>U: Commit markers и результаты
+    U->>L: Восстановленные файлы и checkpoints
+    Note over U,L: Проверка размеров и SHA-256, перенос путей
+  end
+
+  Note over W: nowrap: aws-preflight
+  W->>U: Проверить доступ к ресурсам
+  U->>S: Проверка чтения и временная запись
+  Note over W,U: Также STS, SageMaker и каналы уведомлений
+
+  opt Новый датасет включён
+    Note over W: nowrap: s3-download-input
+    S->>U: Входное видео
+    U->>L: Входное видео
+  end
+
+  Note over W: nowrap: s3-sync-models
+  opt sync_models включён
+    S->>U: Веса моделей
+    U->>L: Кеш моделей
+  end
+  Note over U,L: Иначе используется локальный кеш
+
+  opt Нужна генерация существующего источника
+    Note over W: nowrap: s3-restore-experiment
+    S->>U: Генерация источника
+    U->>L: Генерация источника
+    Note over U,L: Inference commit или legacy generation
+  end
+
+  Note over W: nowrap: prepare-experiment
+  W->>U: Переносимые настройки
+  U->>L: Настройки эксперимента
+  W->>L: Checkpoints
+  Note over W: nowrap: s3-upload
+  L->>U: Настройки эксперимента
+  U->>S: Bundle и затем commit marker
+
+  opt Новый датасет включён
+    Note over W: nowrap: fourdanyone-inference
+    L->>U: Входное видео и кеш моделей
+    U->>L: Запрос inference
+    U->>L: Генерация
+    W->>L: Checkpoints
+    Note over W: nowrap: s3-upload
+    L->>U: Генерация
+    U->>S: Bundle и затем commit marker
+  end
+
+  opt Экспорт Nerfstudio включён
+    Note over W: nowrap: nerfstudio-export
+    L->>U: Генерация или генерация источника
+    U->>L: Датасеты
+    Note over U,L: Выбранные временные кадры, все камеры
+    W->>L: Checkpoints
+    Note over W: nowrap: s3-upload
+    L->>U: Датасеты
+    U->>S: Bundle и затем commit marker
+  end
+
+  opt Реконструкция включена
+    loop Для каждого выбранного кадра
+      Note over W: nowrap: splatfacto
+      L->>U: Датасеты
+      U->>L: RGBA-копия
+      U->>L: Обученная сцена
+      U->>L: Полная PLY
+      U->>L: Логи реконструкции
+      U->>L: Manifest кадра
+      W->>L: Checkpoints
+      Note over W: nowrap: s3-upload
+      L->>U: Все результаты реконструкции кадра
+      U->>S: Bundle и затем commit marker
+
+      opt Rerun сцены включён
+        Note over W: nowrap: splatfacto-rerun
+        L->>U: Полная PLY, RGBA-копия и обученная сцена
+        U->>L: Rerun сцены
+        W->>L: Checkpoints
+        Note over W: nowrap: s3-upload
+        L->>U: Rerun сцены
+        U->>S: Bundle и затем commit marker
+      end
+    end
+  end
+
+  opt Rerun датасета включён
+    Note over W: nowrap: rerun-export
+    L->>U: Генерация или генерация источника
+    U->>L: Rerun датасета
+    W->>L: Checkpoints
+    Note over W: nowrap: s3-upload
+    L->>U: Rerun датасета
+    U->>S: Bundle и затем commit marker
+  end
+
+  Note over W: nowrap: write-run-manifest
+  W->>U: Артефакты и длительности из context
+  U->>L: Manifest запуска
+  W->>L: Checkpoints
+  Note over W: nowrap: s3-upload
+  L->>U: Manifest запуска
+  U->>S: Bundle и затем commit marker
+
+  Note over W,S: S3-диагностика также сохраняется примерно раз в 60 секунд
+  Note over W: nowrap: s3-save-diagnostics
+  W->>L: Отчёт попытки
+  L->>U: Состояние задания, отчёт и логи
+  U->>S: Диагностика попытки и общий статус
+  Note over U,S: Полная диагностика перед остановкой, в том числе при ошибке
+
+  opt CloudWatch включён
+    Note over W: nowrap: cloudwatch-flush
+    W->>C: Оставшиеся логи
+  end
+  Note over W: nowrap: sagemaker-shutdown
+  Note over W,C: Применить policy только после сохранения данных и логов
 ```
 
+После каждого producer сначала сохраняется локальный checkpoint, затем выполняется его `s3-upload`; следующий вычислительный пас начинается только после успешной публикации. Здесь `s3-upload`, `splatfacto`, `splatfacto-rerun` и `s3-restore-experiment` — короткие имена: полные IDs дополнительно содержат producer, номер кадра или имя источника. `start` и `s3-recover-run` — операции worker до выполнения пасов, остальные названия соответствуют пасам или finalizers.
+
+При восстановлении валидный producer пропускается вместе с подтверждённой публикацией. Инфраструктурные пасы без валидатора checkpoint выполняются снова. При ошибке цепочка вычислений останавливается, но finalizers сохранения диагностики и логов всё равно запускаются.
+
 `frame_NNN` означает момент времени, а не номер камеры. Внутри одного экспортированного кадра есть изображения этого момента со всех синтетических камер. Для каждого выбранного кадра обучается отдельная статическая сцена.
-
-## Когда что сохраняется
-
-| Момент | Источник → назначение | Что сохраняется / загружается |
-| --- | --- | --- |
-| `start` | JSON → `D/jobs/job_id/request.json` | Snapshot запроса для detached worker; затем `status.json` и `pipeline.log` |
-| До выполнения пасов, при загрузке checkpoint store | S3 `R/E/.recon-pipeline/commits/` → локальный эксперимент | Восстановление подтверждённых bundles текущего плана, проверка размеров и SHA-256, перенос путей на новую машину |
-| `aws-preflight` | STS / S3 / SageMaker / notifications | Проверка доступности ресурсов; write probe создаёт временный объект в `.access-check/` |
-| `s3-download-input`, только при включённом dataset | S3 `input_prefix/video` → `D/input/basename(video)` | Входное видео; вложенный S3-путь локально сворачивается до имени файла |
-| `s3-sync-models` | S3 `models_prefix/` → `D/models/` | Кеш весов. При `sync_models=false` используется локальный каталог |
-| `s3-restore-experiment:source` | S3 `R/source/` → `D/runs/source/4danyone/` | Генерация источника для exports без нового inference; commit bundle либо legacy prefix |
-| `prepare-experiment` | Настройки → `D/runs/E/pipeline-config.json` | Snapshot переносимых настроек; каталог эксперимента |
-| `fourdanyone-inference` | Видео + веса → `D/runs/E/4danyone/` | Генерация upstream, включая `metadata.json`, `cameras.json`, данные для экспорта; локальный `inference-request.json` рядом с generation содержит конкретные paths |
-| `nerfstudio-export` | 4DAnyone source → `D/runs/E/nerfstudio/F/` | Статический мультикамерный датасет каждого кадра: transforms, изображения, маски и данные upstream |
-| `splatfacto:F` | Экспортированный dataset → `D/runs/E/splatfacto/F/` | RGBA-копия, training outputs/checkpoints, TensorBoard, train/export logs, полный SH PLY, `experiment_manifest.json` |
-| `splatfacto-rerun:F` | PLY + dataset + training run → `splatfacto/F/rerun/` | `reconstruction.rrd` и вспомогательные данные записи |
-| `rerun-export` | Генерация источника → `rerun/E.rrd` | Камеры, изображения, скелет/анимация датасета |
-| `write-run-manifest` | Артефакты context → `pipeline-result.json` | Итоговые datasets, reconstructions, recordings и длительности |
-| После успешного producer | Локальные файлы → S3 `R/E/` | При `upload_results=true`: отдельный `s3-upload:<producer-id>` публикует его bundle до следующего вычислительного паса |
-| Во время выполнения и в finalizer | job status/report/logs → `R/E/.recon-pipeline/attempts/attempt_id/` | Диагностика текущей попытки и общий `.recon-pipeline/status.json` |
-
-Пропущенный по checkpoint producer не переписывает результаты. Инфраструктурные пасы без валидатора checkpoint выполняются снова.
 
 ## Надёжная публикация одного паса
 
@@ -75,23 +181,31 @@ Recovery переносит пути внутри checkpoint values, но не �
 
 ## Локальная структура
 
-| Путь относительно `D` | Содержимое |
-| --- | --- |
-| `input/` | Входные видео |
-| `models/` | Общий кеш весов, включая лицензированные SMPL-X assets |
-| `environment/` | `requirements-lock.txt` и locks отдельных окружений |
-| `jobs/job_id/` | `request.json`, `status.json`, `pipeline.log`, PID/служебные файлы, attempt report |
-| `runs/E/pipeline-config.json` | Параметры эксперимента без machine paths |
-| `runs/E/.recon-pipeline/pass-state.json` | Локальные результаты завершённых пасов |
-| `runs/E/4danyone/` | Генерация 4DAnyone |
-| `runs/E/nerfstudio/F/` | Исходный статический dataset |
-| `runs/E/splatfacto/F/dataset/` | Private RGBA training copy |
-| `runs/E/splatfacto/F/nerfstudio_outputs/` | Run Nerfstudio: конфиг, checkpoints, transforms, TensorBoard |
-| `runs/E/splatfacto/F/exports/splat.ply` | Полная Gaussian PLY с SH-коэффициентами |
-| `runs/E/splatfacto/F/logs/` | `train.log`, `export.log` |
-| `runs/E/splatfacto/F/rerun/reconstruction.rrd` | Запись обученной сцены |
-| `runs/E/rerun/E.rrd` | Запись датасета |
-| `runs/E/pipeline-result.json` | Итоговый manifest |
+Имена данных в первом столбце совпадают с подписями стрелок основной схемы. Пути даны относительно `D`; файлы результатов публикуются под теми же относительными путями внутри S3 prefix `R/E`.
+
+| Данные | Локальный путь | Содержимое |
+| --- | --- | --- |
+| Входное видео | `input/basename(video)` | Вход из S3 `input_prefix/video`; вложенный S3-путь локально сворачивается до имени файла |
+| Кеш моделей | `models/` | Общие веса, включая лицензированные SMPL-X assets; источник — S3 `models_prefix` |
+| Состояние задания | `jobs/job_id/` | `request.json`, `status.json`, `pipeline.log`, PID и служебные файлы |
+| Spool логов | `jobs/job_id/cloudwatch/` | Очередь CloudWatch для повторной отправки на том же диске |
+| Настройки эксперимента | `runs/E/pipeline-config.json` | Переносимые настройки без machine paths |
+| Checkpoints | `runs/E/.recon-pipeline/pass-state.json` | Локальные результаты завершённых пасов |
+| Запрос inference | `runs/E/inference-request.json` | Конкретные runtime paths; сохраняется рядом с generation и не входит в её bundle |
+| Генерация | `runs/E/4danyone/` | Metadata, cameras и данные 4DAnyone для экспорта |
+| Генерация источника | `runs/source/4danyone/` | Уже существующая генерация другого или текущего эксперимента |
+| Датасеты | `runs/E/nerfstudio/F/` | Images, masks и `transforms.json` каждого временного кадра |
+| RGBA-копия | `runs/E/splatfacto/F/dataset/` | Private training copy с alpha по маске |
+| Обученная сцена | `runs/E/splatfacto/F/nerfstudio_outputs/` | Nerfstudio config, checkpoints, transforms и TensorBoard |
+| Полная PLY | `runs/E/splatfacto/F/exports/splat.ply` | Gaussian-сцена с полными SH-коэффициентами |
+| Логи реконструкции | `runs/E/splatfacto/F/logs/` | `train.log`, `export.log` |
+| Manifest кадра | `runs/E/splatfacto/F/experiment_manifest.json` | Training result, профиль и пути результатов кадра |
+| Rerun сцены | `runs/E/splatfacto/F/rerun/` | `reconstruction.rrd` и вспомогательные данные |
+| Rerun датасета | `runs/E/rerun/E.rrd` | Камеры, изображения и анимация датасета |
+| Manifest запуска | `runs/E/pipeline-result.json` | Итоговые datasets, reconstructions, recordings и длительности |
+| Отчёт попытки | `jobs/job_id/attempt-report.json` | Статус попытки, ошибка, текущий пас и длительности |
+
+Диагностика в S3 хранится отдельно: `R/E/.recon-pipeline/attempts/attempt_id/` содержит report, status, request и нужные логи; общий статус — `R/E/.recon-pipeline/status.json`. Логи попытки в CloudWatch отправляются в группу из run config. Locks окружений находятся в `D/environment/` и относятся к установке машины, а не результатам запуска.
 
 ## Логи и остановка
 

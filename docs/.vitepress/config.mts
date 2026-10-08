@@ -7,6 +7,11 @@ export default withMermaid(defineConfig({
   description: 'Архитектура, запуск и API пайплайна реконструкции',
   base: '/4da_3dgs_pipeline/',
   lastUpdated: true,
+  mermaid: {
+    htmlLabels: false,
+    flowchart: { useMaxWidth: false },
+    sequence: { useMaxWidth: false, wrap: true, width: 130, actorMargin: 15 }
+  },
   themeConfig: {
     nav: [
       { text: 'Руководство', link: '/guide/quickstart' },

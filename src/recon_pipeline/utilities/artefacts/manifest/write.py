@@ -15,6 +15,7 @@ def write_manifest(args: argparse.Namespace) -> dict:
         or not isinstance(args.durations, dict)
         or not isinstance(args.reconstructions, list)
         or not isinstance(args.reconstruction_recordings, list)
+        or not isinstance(args.postprocessing, dict)
     ):
         raise ValueError("datasets must be a JSON list and durations a JSON object")
     result = {
@@ -24,6 +25,7 @@ def write_manifest(args: argparse.Namespace) -> dict:
         "datasets": args.datasets,
         "reconstructions": args.reconstructions,
         "reconstruction_recordings": args.reconstruction_recordings,
+        "postprocessing": args.postprocessing,
         "rerun_file": str(args.rerun_file) if args.rerun_file else None,
         "num_views": args.num_views,
         "pass_durations_seconds": args.durations,
@@ -62,6 +64,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         help="JSON list of trained frame results",
     )
     parser.add_argument("--reconstruction-recordings", type=json.loads, default=[])
+    parser.add_argument("--postprocessing", type=json.loads, default={})
     parser.add_argument("--rerun-file", type=Path)
     args = parser.parse_args(argv)
     run_operation(lambda: write_manifest(args))

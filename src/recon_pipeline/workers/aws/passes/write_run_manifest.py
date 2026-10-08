@@ -3,6 +3,7 @@
 import json
 
 from recon_pipeline.core import PassResult, PipelineContext
+from recon_pipeline.postprocessing.splat_conversion import converted_splat_artifact
 from recon_pipeline.core.command import CommandRunner
 from recon_pipeline.core.utility import run_utility
 from recon_pipeline.datasets.fourdanyone.artifacts import EXPERIMENT_WORKSPACE
@@ -34,6 +35,14 @@ class WriteRunManifestPass:
             | (
                 {splatfacto_artifact(frame) for frame in config.reconstruction_frames}
                 if config.reconstruction.enabled
+                else set()
+            )
+            | (
+                {
+                    converted_splat_artifact(frame)
+                    for frame in config.reconstruction_frames
+                }
+                if config.postprocessing.splat_conversion.enabled
                 else set()
             )
             | (
@@ -81,6 +90,16 @@ class WriteRunManifestPass:
                         for key, value in context.artifacts.items()
                         if key.startswith("recording.splatfacto:")
                     ]
+                ),
+                "--postprocessing",
+                json.dumps(
+                    {
+                        "splat_conversion": [
+                            value
+                            for key, value in context.artifacts.items()
+                            if key.startswith("postprocessing.splat_conversion:")
+                        ]
+                    }
                 ),
                 "--durations",
                 json.dumps(dict(context.values.get("pass_durations", {}))),

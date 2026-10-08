@@ -311,6 +311,7 @@ sequencing, checkpoints and notifications.
 | Prepare workspace | `recon-prepare-experiment` | `utilities.datasets.fourdanyone.prepare_experiment` |
 | Generate dataset | `recon-4danyone` | `utilities.datasets.fourdanyone.inference` |
 | Prepare RGBA training copy | `recon-prepare-rgba` | `utilities.reconstructions.nerfstudio.prepare_rgba` |
+| Convert Gaussian artifacts | `recon-splat-convert` | `utilities.artefacts.splats.convert` |
 | Train and export one frame | `recon-splatfacto` | `utilities.reconstructions.nerfstudio.splatfacto` |
 | Record trained Gaussian scene | `recon-splatfacto-rerun` | `utilities.artefacts.rerun.splatfacto` |
 | Export synchronized frames | `recon-nerfstudio-export` | `utilities.reconstructions.nerfstudio.export` |
@@ -523,23 +524,48 @@ PYTHONPATH="$RECON_PIPELINE_ROOT/src${PYTHONPATH:+:$PYTHONPATH}" \
 
 For preparation alone, run `recon-prepare-rgba --dataset ... --output ... --mask-threshold ... --mask-erosion-pixels ...` in an environment with NumPy, Pillow and OpenCV. Every utility also supports `--help` without GPU imports. Existing standalone output directories require an explicit `--replace-existing`.
 
-Choose export formats with `pipeline.reconstruction.config.export_formats`, for example:
+Artifact conversion belongs to a root-level `postprocessing` section alongside
+`pipeline`, `artifacts`, and `aws_worker`:
 
 ```json
-"export_formats": ["ply", "compressed_ply", "spz", "sog"]
+"postprocessing": {
+  "splat_conversion": {
+    "enabled": true,
+    "formats": ["compressed_ply", "spz", "sog"]
+  }
+}
 ```
 
-The default is `["ply"]`, including older configs without this field. The generator
-accepts `--splatfacto-export-formats ply spz sog` (also when cloning a template);
-the standalone utility accepts `--export-formats`. Supported types map to
-`exports/splat.ply`, `exports/splat.compressed.ply`, `exports/splat.spz`, and
-`exports/splat.sog`. PLY is always retained as the full SH source for conversion
-and Rerun, even when omitted from the requested delivery formats. Manifests expose
-`export_formats` and an `exported_artifacts` format-to-path map. All generated
-files are published by the existing per-frame S3 upload; a failed conversion
-prevents the frame from being marked complete. Changing formats on a completed
-run invalidates that frame's reconstruction checkpoint; use a new experiment or
-expect it to train again.
+When absent or disabled, postprocessing adds no passes. Splatfacto always exports
+its full SH source PLY; conversion is a separate final stage after all
+reconstruction and Rerun passes, before the final manifest. The generator accepts
+`--splat-conversion` / `--no-splat-conversion` and
+`--splat-conversion-formats compressed_ply spz sog`, including template overrides.
+Supported formats are `ply` (a source copy), `compressed_ply`, `spz`, and `sog`.
+
+Each frame gets an independently checkpointed `splat-convert:frame_NNN` pass.
+Results, conversion logs and `manifest.json` live in
+`postprocessing/splat_conversion/frame_NNN/`; the files are `splat.ply`,
+`splat.compressed.ply`, `splat.spz`, and `splat.sog` for requested formats.
+The final `pipeline-result.json` lists these separately under
+`postprocessing.splat_conversion`, with each frame's `formats` and
+`exported_artifacts` map. With `upload_results: true`, the conversion bundle is
+published immediately after its pass and restored independently from S3.
+A missing converter, failed conversion or empty output prevents that postprocessing
+pass from completing. Source reconstruction checkpoints remain valid: retrying
+conversion or changing formats does not retrain Splatfacto or regenerate Rerun.
+Removed formats disappear from the local rebuilt bundle; S3 consumers should use
+the latest committed artifact map (previous unreferenced S3 files may remain).
+
+Standalone conversion of an existing artifact requires no reconstruction:
+
+```bash
+recon-splat-convert \
+  --input path/to/splat.ply \
+  --output path/to/postprocessing \
+  --formats compressed_ply spz sog \
+  --splat-transform "$RECON_SPLAT_TRANSFORM_PREFIX/bin/splat-transform"
+```
 
 `./scripts/setup_environment.sh` installs Node.js 22 and
 `@playcanvas/splat-transform` (default version 3.10.0) in the managed
@@ -548,7 +574,7 @@ package version. Run setup again and source the environment file on an existing
 machine; `--configure-only` adds variables but does not install the converter.
 `./scripts/check_environment.sh` checks the converter, Node.js >=22, and the
 configured package version without running a reconstruction or accessing AWS.
-The standalone utility can use `--splat-transform /absolute/path/to/splat-transform`.
+The standalone conversion utility can use `--splat-transform /absolute/path/to/splat-transform`.
 Conversions run quietly on CPU (`--gpu cpu`) so SOG does not need WebGPU/Vulkan.
 
 Splatfacto utility progress emits at most one event per integer percentage.
@@ -616,7 +642,8 @@ The AWS worker checkpoints successful passes locally in the experiment's
 `.recon-pipeline/pass-state.json`. With the existing `aws_worker.upload_results`
 set to `true`, it also adds an upload pass immediately after workspace creation,
 4DAnyone inference, Nerfstudio dataset export, each Splatfacto frame, each Rerun
-export, and the final run manifest. No config schema change is required.
+export, each enabled postprocessing pass, and the final run manifest.
+The optional root `postprocessing` section is compatible with schema 7.
 
 Each upload transfers only its producer's outputs to the existing
 `s3://<bucket>/<runs_prefix>/<experiment>/` layout. A completion record is written

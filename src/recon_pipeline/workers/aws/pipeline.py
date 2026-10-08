@@ -11,6 +11,7 @@ from recon_pipeline.datasets.fourdanyone.passes import (
 )
 from recon_pipeline.reconstructions.nerfstudio.passes import NerfstudioExportPass
 from recon_pipeline.core import JsonPassCheckpointStore, Pipeline
+from recon_pipeline.postprocessing.splat_conversion import SplatConversionPass
 from recon_pipeline.reconstructions.nerfstudio.passes.splatfacto import SplatfactoPass
 from recon_pipeline.artifacts.rerun.passes.splatfacto import SplatfactoRerunPass
 from recon_pipeline.artifacts.rerun.passes import RerunExportPass
@@ -92,6 +93,10 @@ def build_aws_pipeline(
                 passes.append(SplatfactoRerunPass(config, frame))
     if config.rerun.enabled:
         passes.append(RerunExportPass(config))
+    if config.postprocessing.splat_conversion.enabled:
+        passes.extend(
+            SplatConversionPass(config, frame) for frame in config.reconstruction_frames
+        )
     passes.append(WriteRunManifestPass(config))
     settings = config.settings_dict()
     input_identity = (worker.bucket_name, worker.input_prefix, worker.bucket.video)

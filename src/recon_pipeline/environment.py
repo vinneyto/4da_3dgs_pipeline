@@ -151,8 +151,13 @@ class PipelineEnvironment:
         values["reconstruction"] = {
             **values.get("reconstruction", {}),
             "nerfstudio_bin": str(self.nerfstudio_bin),
+        }
+        postprocessing = dict(values.get("postprocessing") or {})
+        postprocessing["splat_conversion"] = {
+            **postprocessing.get("splat_conversion", {}),
             "splat_transform": str(self.splat_transform_prefix / "bin/splat-transform"),
         }
+        values["postprocessing"] = postprocessing
         rerun = values.get("reconstruction_rerun") or {}
         if isinstance(rerun, bool):
             rerun = {"enabled": rerun}

@@ -8,11 +8,11 @@ EXPORT_FILENAMES = {
 }
 
 
-def validate_export_formats(value):
+def validate_formats(value):
     if not isinstance(value, (list, tuple)) or not value:
-        raise ValueError("export_formats must be a non-empty list")
+        raise ValueError("formats must be a non-empty list")
     if any(not isinstance(item, str) or item not in EXPORT_FILENAMES for item in value):
-        raise ValueError(f"export_formats supports only: {', '.join(EXPORT_FILENAMES)}")
+        raise ValueError(f"formats supports only: {', '.join(EXPORT_FILENAMES)}")
     if len(set(value)) != len(value):
-        raise ValueError("export_formats must not contain duplicates")
+        raise ValueError("formats must not contain duplicates")
     return tuple(value)

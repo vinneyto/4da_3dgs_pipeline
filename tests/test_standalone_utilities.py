@@ -35,6 +35,7 @@ UTILITY_MODULES = [
     "utilities.reconstructions.nerfstudio.prepare_rgba",
     "utilities.reconstructions.nerfstudio.splatfacto",
     "utilities.artefacts.rerun.splatfacto",
+    "utilities.artefacts.splats.convert",
     "utilities.artefacts.rerun.export",
     "utilities.cloud.aws.preflight",
     "utilities.storage.s3.download_input",

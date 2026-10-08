@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from recon_pipeline.environment import PipelineEnvironment
+from recon_pipeline.postprocessing.config import PostprocessingConfig
 from recon_pipeline.run_document import (
     SUPPORTED_SCHEMA_VERSIONS,
     validate_environment_free,
@@ -171,6 +172,7 @@ def load_pipeline_config(path: Path) -> "FourDAnyoneConfig":
         experiment_name=document.get("experiment_name"),
         artifacts=document.get("artifacts"),
     )
+    values["postprocessing"] = document.get("postprocessing")
     environment = PipelineEnvironment.from_environ()
     video = values.get("video")
     if video is None and values.get("video_path"):
@@ -213,6 +215,7 @@ class FourDAnyoneConfig:
     rerun: RerunConfig = RerunConfig()
     reconstruction: SplatfactoConfig = SplatfactoConfig()
     reconstruction_rerun: SplatfactoRerunConfig = SplatfactoRerunConfig()
+    postprocessing: PostprocessingConfig = PostprocessingConfig()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "video_path", Path(self.video_path))
@@ -239,6 +242,19 @@ class FourDAnyoneConfig:
                 self,
                 "reconstruction_rerun",
                 SplatfactoRerunConfig.from_dict(self.reconstruction_rerun),
+            )
+        if not isinstance(self.postprocessing, PostprocessingConfig):
+            object.__setattr__(
+                self,
+                "postprocessing",
+                PostprocessingConfig.from_dict(self.postprocessing),
+            )
+        if (
+            self.postprocessing.splat_conversion.enabled
+            and not self.reconstruction.enabled
+        ):
+            raise ValueError(
+                "postprocessing.splat_conversion requires an enabled reconstruction stage"
             )
         self.validate_values()
 
@@ -435,7 +451,7 @@ class FourDAnyoneConfig:
             payload.pop(name)
         payload["video"] = self.video_path.name
         payload["reconstruction"].pop("nerfstudio_bin")
-        payload["reconstruction"].pop("splat_transform")
+        payload["postprocessing"]["splat_conversion"].pop("splat_transform")
         payload["reconstruction_rerun"].pop("python")
         return payload
 
@@ -451,6 +467,9 @@ class FourDAnyoneConfig:
         )
         values["reconstruction_rerun"] = SplatfactoRerunConfig.from_dict(
             values.get("reconstruction_rerun")
+        )
+        values["postprocessing"] = PostprocessingConfig.from_dict(
+            values.get("postprocessing")
         )
         return cls(**values)
 

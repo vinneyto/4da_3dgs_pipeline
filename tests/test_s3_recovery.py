@@ -683,27 +683,37 @@ def test_source_experiment_restores_verified_generation_bundle(tmp_path, monkeyp
     assert not (destination / "unrelated.ply").exists()
 
 
-def test_default_ply_exports_keep_old_frame_signature(tmp_path):
+def test_postprocessing_changes_do_not_invalidate_reconstruction(tmp_path):
     settings = make_pipeline_config(tmp_path).settings_dict()
-    current = fingerprint(
+    training = fingerprint(
         "splatfacto:frame_000", settings, ("bucket", "input", "video")
     )
-    settings["reconstruction"].pop("export_formats")
-    assert (
-        fingerprint("splatfacto:frame_000", settings, ("bucket", "input", "video"))
-        == current
+    conversion = fingerprint(
+        "splat-convert:frame_000", settings, ("bucket", "input", "video")
     )
-    settings["reconstruction"]["export_formats"] = ["ply", "spz"]
+    settings["postprocessing"]["splat_conversion"] = {
+        "enabled": True,
+        "formats": ["spz"],
+    }
     assert (
         fingerprint("splatfacto:frame_000", settings, ("bucket", "input", "video"))
-        != current
+        == training
+    )
+    assert (
+        fingerprint("splat-convert:frame_000", settings, ("bucket", "input", "video"))
+        != conversion
+    )
+    settings.pop("postprocessing")
+    assert (
+        fingerprint("splatfacto:frame_000", settings, ("bucket", "input", "video"))
+        == training
     )
 
 
 def test_converted_artifacts_publish_and_recover_with_rebased_manifest_paths(tmp_path):
     options, plan = fixture_bundle(tmp_path)
-    exports = options["root"] / "splatfacto/frame_000/exports"
-    exports.mkdir()
+    exports = options["root"] / "postprocessing/splat_conversion/frame_000"
+    exports.mkdir(parents=True)
     artifacts = {}
     for fmt, name in [
         ("ply", "splat.ply"),
@@ -714,7 +724,13 @@ def test_converted_artifacts_publish_and_recover_with_rebased_manifest_paths(tmp
         path = exports / name
         path.write_bytes(fmt.encode())
         artifacts[fmt] = str(path)
-    options["checkpoint"]["artifacts"]["trained"]["exported_artifacts"] = artifacts
+    options["paths"] = ["postprocessing/splat_conversion/frame_000"]
+    options["checkpoint"]["id"] = "splat-convert:frame_000"
+    options["checkpoint"]["artifacts"] = {
+        "converted": {"exported_artifacts": artifacts}
+    }
+    options["upload_id"] = "s3-upload:splat-convert:frame_000"
+    plan[0].update(id=options["checkpoint"]["id"], upload_id=options["upload_id"])
     bundles.publish(**options)
     new_data = tmp_path / "other-machine"
     root = new_data / "runs/example"
@@ -729,9 +745,9 @@ def test_converted_artifacts_publish_and_recover_with_rebased_manifest_paths(tmp
         region="region",
         client=options["client"],
     )
-    assert result == {"restored": 1, "downloaded": 6}
+    assert result == {"restored": 1, "downloaded": 4}
     recovered = json.loads(checkpoint_path.read_text())["passes"][0]["artifacts"][
-        "trained"
+        "converted"
     ]["exported_artifacts"]
     for fmt, original in artifacts.items():
         expected = root / Path(original).relative_to(options["root"])

@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Sequence
 from urllib.parse import urlparse
 
-from recon_pipeline.utilities.reconstructions.nerfstudio._exports import (
+from recon_pipeline.utilities.artefacts.splats._formats import (
     EXPORT_FILENAMES,
 )
 
@@ -116,8 +116,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--reconstruction", action=argparse.BooleanOptionalAction, default=None
     )
     reconstruction.add_argument("--reconstruction-frames", type=int, nargs="+")
-    reconstruction.add_argument(
-        "--splatfacto-export-formats", nargs="+", choices=EXPORT_FILENAMES
+    postprocessing = parser.add_argument_group("Artifact postprocessing")
+    postprocessing.add_argument(
+        "--splat-conversion", action=argparse.BooleanOptionalAction, default=None
+    )
+    postprocessing.add_argument(
+        "--splat-conversion-formats", nargs="+", choices=EXPORT_FILENAMES
     )
     add_profile_arguments(reconstruction, prefix="splatfacto-")
     reconstruction.add_argument(
@@ -306,7 +310,6 @@ def build_document_from_template(args: argparse.Namespace) -> dict[str, Any]:
         (args.dataset, dataset, "enabled"),
         (args.reconstruction, reconstruction, "enabled"),
         (args.reconstruction_frames, reconstruction["config"], "frames"),
-        (args.splatfacto_export_formats, reconstruction["config"], "export_formats"),
         (args.nerfstudio, artifacts["nerfstudio"], "enabled"),
         (args.nerfstudio_frames, artifacts["nerfstudio"], "frames"),
         (
@@ -319,6 +322,14 @@ def build_document_from_template(args: argparse.Namespace) -> dict[str, Any]:
         if value is not None:
             target[key] = value
 
+    if args.splat_conversion is not None or args.splat_conversion_formats is not None:
+        postprocessing = document.get("postprocessing") or {}
+        document["postprocessing"] = postprocessing
+        conversion = postprocessing.setdefault("splat_conversion", {})
+        if args.splat_conversion is not None:
+            conversion["enabled"] = args.splat_conversion
+        if args.splat_conversion_formats is not None:
+            conversion["formats"] = args.splat_conversion_formats
     validate_run_settings(document)
     return document
 
@@ -391,7 +402,6 @@ def build_document(args: argparse.Namespace) -> dict[str, Any]:
                 "type": "nerfstudio_splatfacto",
                 "config": {
                     "frames": args.reconstruction_frames,
-                    "export_formats": args.splatfacto_export_formats or ["ply"],
                     **asdict(
                         TrainingProfile(
                             **{
@@ -402,6 +412,13 @@ def build_document(args: argparse.Namespace) -> dict[str, Any]:
                     ),
                 },
             },
+        },
+        "postprocessing": {
+            "splat_conversion": {
+                "enabled": args.splat_conversion or False,
+                "formats": args.splat_conversion_formats
+                or ["compressed_ply", "spz", "sog"],
+            }
         },
         "artifacts": {
             "dataset": {

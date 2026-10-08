@@ -24,7 +24,6 @@
       "type": "nerfstudio_splatfacto",
       "config": {
         "frames": null,
-        "export_formats": ["ply"],
         "max_num_iterations": 60000,
         "stop_split_at": 32000,
         "cull_alpha_thresh": 0.02,
@@ -71,6 +70,16 @@
         "replace_existing": false,
         "max_splats": 100000
       }
+    }
+  },
+  "postprocessing": {
+    "splat_conversion": {
+      "enabled": false,
+      "formats": [
+        "compressed_ply",
+        "spz",
+        "sog"
+      ]
     }
   },
   "aws_worker": {

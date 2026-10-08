@@ -587,10 +587,13 @@ def test_configure_does_not_add_nonexistent_cuda_header_path(monkeypatch, tmp_pa
 
 def test_converter_environment_is_materialized_but_not_saved(pipeline_environment):
     pipeline, _ = load_aws_worker_config(ROOT / "config/splatfacto-run.example.json")
-    assert pipeline.reconstruction.splat_transform == str(
+    assert pipeline.postprocessing.splat_conversion.splat_transform == str(
         pipeline_environment.splat_transform_prefix / "bin/splat-transform"
     )
-    assert "splat_transform" not in pipeline.settings_dict()["reconstruction"]
+    assert (
+        "splat_transform"
+        not in pipeline.settings_dict()["postprocessing"]["splat_conversion"]
+    )
 
 
 def test_checker_detects_missing_and_wrong_converter_version(pipeline_environment):
@@ -630,3 +633,14 @@ def test_checker_detects_missing_and_wrong_converter_version(pipeline_environmen
         ]
         == "OK"
     )
+
+
+def test_portable_postprocessing_rejects_machine_paths(tmp_path):
+    from recon_pipeline.workers.aws.config import validate_run_settings
+
+    document = json.loads((ROOT / "config/splatfacto-run.example.json").read_text())
+    document["postprocessing"]["splat_conversion"][
+        "splat_transform"
+    ] = "/machine/bin/splat-transform"
+    with pytest.raises(ValueError, match="machine environment settings"):
+        validate_run_settings(document)

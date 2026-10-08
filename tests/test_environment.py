@@ -297,10 +297,11 @@ def test_start_snapshot_is_portable_and_background_worker_inherits_env(
     )
     cli.main()
     request = captured[0]
-    assert "local" not in request["aws_worker"]
-    assert "environment" not in request
-    assert "nerfstudio_bin" not in request["pipeline"]["reconstruction"]["config"]
-    assert "python" not in request["artifacts"]["reconstruction"]["rerun"]
+    snapshot = request.to_dict()
+    assert "local" not in snapshot["aws_worker"]
+    assert "environment" not in snapshot
+    assert "nerfstudio_bin" not in snapshot["pipeline"]["reconstruction"]["config"]
+    assert "python" not in snapshot["artifacts"]["reconstruction"]["rerun"]
     # The process loader takes paths from its inherited environment again.
     from recon_pipeline.workers.aws.config import (
         AwsWorkerConfig,

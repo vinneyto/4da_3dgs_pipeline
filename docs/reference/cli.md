@@ -91,6 +91,8 @@
 | `--rerun-replace-existing, --no-rerun-replace-existing` | нет | flag | `false` | — |
 | `--reconstruction, --no-reconstruction` | нет | flag | `—` | — |
 | `--reconstruction-frames` | нет | int / + | `—` | — |
+| `--splat-conversion, --no-splat-conversion` | нет | flag | `—` | — |
+| `--splat-conversion-formats` | нет | str / + | `—` | —; choices: ply, compressed_ply, spz, sog |
 | `--splatfacto-max-num-iterations` | нет | int | `60000` | — |
 | `--splatfacto-stop-split-at` | нет | int | `32000` | — |
 | `--splatfacto-cull-alpha-thresh` | нет | float | `0.02` | — |
@@ -188,6 +190,18 @@
 | `--output` | да | Path | `—` | — |
 | `--mask-threshold` | нет | int | `127` | — |
 | `--mask-erosion-pixels` | нет | int | `1` | — |
+
+## recon-splat-convert
+
+Модуль: `recon_pipeline.utilities.artefacts.splats.convert`. [Исходник](https://github.com/vinneyto/4da_3dgs_pipeline/blob/main/src/recon_pipeline/utilities/artefacts/splats/convert.py).
+
+| Аргумент | Обязательный | Тип / количество | Default | Описание / choices |
+| --- | --- | --- | --- | --- |
+| `--input` | да | Path | `—` | — |
+| `--output` | да | Path | `—` | — |
+| `--formats` | да | str / + | `—` | —; choices: ply, compressed_ply, spz, sog |
+| `--splat-transform` | нет | str | `"splat-transform"` | — |
+| `--replace-existing` | нет | flag | `false` | — |
 
 ## recon-splatfacto
 
@@ -372,4 +386,5 @@
 | `--durations` | нет | loads | `{}` | JSON object mapping operation names to seconds |
 | `--reconstructions` | нет | loads | `[]` | JSON list of trained frame results |
 | `--reconstruction-recordings` | нет | loads | `[]` | — |
+| `--postprocessing` | нет | loads | `{}` | — |
 | `--rerun-file` | нет | Path | `—` | — |

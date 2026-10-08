@@ -3,9 +3,15 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, replace
 from pathlib import Path
-from typing import Any, Mapping
+from typing import TYPE_CHECKING, Mapping
+
+if TYPE_CHECKING:
+    from recon_pipeline.datasets.fourdanyone.config import (
+        DatasetConfiguration,
+        FourDAnyoneConfig,
+    )
 
 # Defaults belong to installation only. Runtime loading never guesses machine paths.
 INSTALL_DEFAULTS = {
@@ -138,31 +144,45 @@ class PipelineEnvironment:
     def python(self) -> Path:
         return self.conda_env / "bin/python"
 
-    def materialize(self, payload: dict[str, Any], video: Path) -> dict[str, Any]:
-        values = dict(payload)
-        values.pop("video", None)
-        values.update(
+    def materialize(
+        self, settings: DatasetConfiguration, video: Path
+    ) -> FourDAnyoneConfig:
+        """Attach this machine's paths while retaining typed nested settings."""
+        from recon_pipeline.datasets.fourdanyone.config import FourDAnyoneConfig
+        from recon_pipeline.postprocessing.config import PostprocessingConfig
+
+        dataset = settings.dataset
+        return FourDAnyoneConfig(
             video_path=video,
+            experiment_name=settings.experiment_name,
             fourdanyone_root=self.fourdanyone_root,
             model_dir=self.data_root / "models",
             runs_dir=self.data_root / "runs",
             python=str(self.python),
+            views_per_layer=dataset.views_per_layer,
+            layer_pitches=dataset.layer_pitches,
+            start_yaw=dataset.start_yaw,
+            yaw_span=dataset.yaw_span,
+            target_fps=dataset.target_fps,
+            seed=dataset.seed,
+            enable_turbo=dataset.enable_turbo,
+            attention_backend=dataset.attention_backend,
+            resume=dataset.resume,
+            dataset_enabled=settings.dataset_enabled,
+            nerfstudio=settings.nerfstudio,
+            rerun=settings.rerun,
+            reconstruction=replace(
+                settings.reconstruction, nerfstudio_bin=str(self.nerfstudio_bin)
+            ),
+            reconstruction_rerun=replace(
+                settings.reconstruction_rerun, python=str(self.splatfacto_rerun_python)
+            ),
+            postprocessing=PostprocessingConfig(
+                replace(
+                    settings.postprocessing.splat_conversion,
+                    splat_transform=str(
+                        self.splat_transform_prefix / "bin/splat-transform"
+                    ),
+                )
+            ),
         )
-        values["reconstruction"] = {
-            **values.get("reconstruction", {}),
-            "nerfstudio_bin": str(self.nerfstudio_bin),
-        }
-        postprocessing = dict(values.get("postprocessing") or {})
-        postprocessing["splat_conversion"] = {
-            **postprocessing.get("splat_conversion", {}),
-            "splat_transform": str(self.splat_transform_prefix / "bin/splat-transform"),
-        }
-        values["postprocessing"] = postprocessing
-        rerun = values.get("reconstruction_rerun") or {}
-        if isinstance(rerun, bool):
-            rerun = {"enabled": rerun}
-        values["reconstruction_rerun"] = {
-            **rerun,
-            "python": str(self.splatfacto_rerun_python),
-        }
-        return values

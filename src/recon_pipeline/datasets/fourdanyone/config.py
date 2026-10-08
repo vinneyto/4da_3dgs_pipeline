@@ -12,6 +12,7 @@ from recon_pipeline.postprocessing.config import PostprocessingConfig
 from recon_pipeline.run_document import (
     SUPPORTED_SCHEMA_VERSIONS,
     validate_environment_free,
+    strip_environment,
 )
 from recon_pipeline.reconstructions.nerfstudio.config import NerfstudioArtifactConfig
 from recon_pipeline.artifacts.rerun.config import RerunConfig
@@ -20,139 +21,70 @@ from recon_pipeline.reconstructions.nerfstudio.splatfacto_config import (
     SplatfactoRerunConfig,
 )
 
+from recon_pipeline.settings import (
+    DatasetSettings,
+    PipelineSettings,
+    ArtifactSettings,
+    parse_postprocessing,
+)
+
 DEFAULT_LAYER_PITCHES = (-15, 0, 15)
 FOURDANYONE_DATASET_TYPE = "4danyone"
 
 
-def _migrate_legacy_nerfstudio_artifact(
-    values: dict[str, Any],
-    payload: Any = None,
-    *,
-    default_enabled: bool = False,
-) -> Any:
-    """Move pre-v6 export settings out of the 4DAnyone stage."""
-    legacy: dict[str, Any] = {}
-    if "frame" in values:
-        if "frame_indices" in values:
-            raise ValueError(
-                "pipeline must use either frame or frame_indices, not both"
-            )
-        legacy["frames"] = [values.pop("frame")]
-    elif "frame_indices" in values:
-        legacy["frames"] = values.pop("frame_indices")
-    if "export_device" in values:
-        legacy["device"] = values.pop("export_device")
-    if payload is not None and legacy:
-        raise ValueError(
-            "configure Nerfstudio export in artifacts.dataset.nerfstudio, "
-            "not pipeline.dataset.config"
-        )
-    if payload is not None:
-        return payload
-    return {"enabled": bool(legacy) or default_enabled, **legacy}
+@dataclass(frozen=True, slots=True)
+class DatasetConfiguration:
+    """Resolved portable run settings returned by dataset extraction."""
+
+    experiment_name: str
+    dataset: DatasetSettings = DatasetSettings()
+    dataset_enabled: bool = True
+    nerfstudio: NerfstudioArtifactConfig = NerfstudioArtifactConfig(enabled=False)
+    rerun: RerunConfig = RerunConfig()
+    reconstruction: SplatfactoConfig = SplatfactoConfig()
+    reconstruction_rerun: SplatfactoRerunConfig = SplatfactoRerunConfig()
+    postprocessing: PostprocessingConfig = PostprocessingConfig()
 
 
 def extract_4danyone_dataset_config(
-    pipeline: dict[str, Any],
+    pipeline: PipelineSettings,
     *,
     experiment_name: str | None = None,
-    artifacts: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Return the concrete dataset configuration from a pipeline document.
-
-    Schema v6 models the pipeline as typed stages and artifacts as independent
-    root tasks. Earlier schemas stored both directly in the pipeline object.
-    """
-    if "dataset" not in pipeline:
-        values = dict(pipeline)
-        # Flat pre-v4 configurations always ran the static export.
-        values["nerfstudio"] = _migrate_legacy_nerfstudio_artifact(
-            values,
-            default_enabled=True,
-        )
-        return values
-
-    stage = pipeline["dataset"]
-    if not isinstance(stage, dict):
-        raise TypeError("pipeline.dataset must be an object")
-    dataset_enabled = stage.get("enabled", True)
-    if not isinstance(dataset_enabled, bool):
-        raise TypeError("pipeline.dataset.enabled must be a boolean")
-    stage_type = stage.get("type")
-    if dataset_enabled and stage_type != FOURDANYONE_DATASET_TYPE:
-        raise ValueError(
-            f"unsupported pipeline.dataset.type {stage_type!r}; "
-            f"expected {FOURDANYONE_DATASET_TYPE!r}"
-        )
-    config = stage.get("config", {})
-    stage_artifacts = stage.get("artifacts", {})
-    if not isinstance(config, dict):
-        raise TypeError("pipeline.dataset.config must be an object")
-    if not isinstance(stage_artifacts, dict):
-        raise TypeError("pipeline.dataset.artifacts must be an object")
-
-    values = dict(config)
-    experiment_name = experiment_name or pipeline.get("experiment_name")
-    if experiment_name is not None:
-        configured_name = values.get("experiment_name")
-        if configured_name is not None and configured_name != experiment_name:
-            raise ValueError(
-                "pipeline.experiment_name and "
-                "pipeline.dataset.config.experiment_name must match"
-            )
-        values["experiment_name"] = experiment_name
-    root_artifacts = artifacts or {}
-    if not isinstance(root_artifacts, dict):
-        raise TypeError("artifacts must be an object")
-    dataset_artifacts = root_artifacts.get("dataset", {})
-    if not isinstance(dataset_artifacts, dict):
-        raise TypeError("artifacts.dataset must be an object")
-    rerun_payload = dataset_artifacts.get("rerun", stage_artifacts.get("rerun"))
-    nerfstudio_payload = _migrate_legacy_nerfstudio_artifact(
-        values,
-        dataset_artifacts.get("nerfstudio"),
+    artifacts: ArtifactSettings = ArtifactSettings(),
+    postprocessing: PostprocessingConfig = PostprocessingConfig(),
+) -> DatasetConfiguration:
+    """Resolve typed stages and artifacts without converting them to dictionaries."""
+    name = (
+        experiment_name
+        or pipeline.experiment_name
+        or pipeline.dataset.config.experiment_name
     )
-    if "rerun" in values and rerun_payload is not None:
-        raise ValueError("configure Rerun in root artifacts, not dataset.config")
-    values["dataset_enabled"] = dataset_enabled
-    values["nerfstudio"] = nerfstudio_payload
-    values["rerun"] = rerun_payload
-
-    reconstruction = pipeline.get("reconstruction")
-    if reconstruction is None:
-        reconstruction = {}
-    if not isinstance(reconstruction, dict):
-        raise TypeError("pipeline.reconstruction must be an object")
-    enabled = reconstruction.get("enabled", bool(reconstruction))
-    if not isinstance(enabled, bool):
-        raise TypeError("pipeline.reconstruction.enabled must be a boolean")
-    if enabled and reconstruction.get("type") != "nerfstudio_splatfacto":
-        raise ValueError("unsupported pipeline.reconstruction.type")
-    settings = reconstruction.get("config", {})
-    if not isinstance(settings, dict):
-        raise TypeError("pipeline.reconstruction.config must be an object")
-    values["reconstruction"] = {**(settings if enabled else {}), "enabled": enabled}
-    reconstruction_artifacts = root_artifacts.get("reconstruction", {})
-    if not isinstance(reconstruction_artifacts, dict):
-        raise TypeError("artifacts.reconstruction must be an object")
-    values["reconstruction_rerun"] = reconstruction_artifacts.get("rerun")
-    if (
-        SplatfactoRerunConfig.from_dict(values["reconstruction_rerun"]).enabled
-        and not enabled
-    ):
+    if not name:
+        raise ValueError("experiment_name is required")
+    configured_name = pipeline.dataset.config.experiment_name
+    if configured_name is not None and configured_name != name:
+        raise ValueError(
+            "pipeline.experiment_name and pipeline.dataset.config.experiment_name must match"
+        )
+    enabled = pipeline.reconstruction.enabled
+    if artifacts.reconstruction.rerun.enabled and not enabled:
         raise ValueError(
             "artifacts.reconstruction.rerun requires an enabled reconstruction stage"
         )
-    rerun_enabled = RerunConfig.from_dict(rerun_payload).enabled
-    nerfstudio_enabled = NerfstudioArtifactConfig.from_dict(nerfstudio_payload).enabled
-    if (
-        not dataset_enabled
-        and not nerfstudio_enabled
-        and not rerun_enabled
-        and not enabled
-    ):
+    nerfstudio = artifacts.dataset.nerfstudio
+    rerun = artifacts.dataset.rerun or pipeline.dataset.rerun or RerunConfig()
+    if not any((pipeline.dataset.enabled, nerfstudio.enabled, rerun.enabled, enabled)):
         raise ValueError("no pipeline stage or artifact is enabled")
-    return values
+    return DatasetConfiguration(
+        name,
+        pipeline.dataset.config,
+        pipeline.dataset.enabled,
+        nerfstudio,
+        rerun,
+        pipeline.reconstruction.config,
+        artifacts.reconstruction.rerun,
+        postprocessing,
+    )
 
 
 def load_pipeline_config(path: Path) -> "FourDAnyoneConfig":
@@ -161,34 +93,25 @@ def load_pipeline_config(path: Path) -> "FourDAnyoneConfig":
         raise ValueError(
             f"config schema_version must be one of {sorted(SUPPORTED_SCHEMA_VERSIONS)}"
         )
-    try:
-        payload = document["pipeline"]
-    except KeyError as error:
-        raise ValueError("config must contain a pipeline object") from error
+    if "pipeline" not in document:
+        raise ValueError("config must contain a pipeline object")
     if document["schema_version"] >= 7:
         validate_environment_free(document)
+    else:
+        document = strip_environment(document)
     values = extract_4danyone_dataset_config(
-        payload,
+        PipelineSettings.from_dict(document["pipeline"]),
         experiment_name=document.get("experiment_name"),
-        artifacts=document.get("artifacts"),
+        artifacts=ArtifactSettings.from_dict(document.get("artifacts")),
+        postprocessing=parse_postprocessing(document.get("postprocessing")),
     )
-    values["postprocessing"] = document.get("postprocessing")
     environment = PipelineEnvironment.from_environ()
-    video = values.get("video")
-    if video is None and values.get("video_path"):
-        video = Path(values["video_path"]).name
+    video = values.dataset.video
     if not video or Path(video).is_absolute() or ".." in Path(video).parts:
         raise ValueError(
             "local dataset.config.video must be relative to RECON_DATA_ROOT/input"
         )
-    if "turbo" in values:
-        values["enable_turbo"] = values.pop("turbo")
-    return FourDAnyoneConfig.from_dict(
-        environment.materialize(
-            values,
-            environment.data_root / "input" / video,
-        )
-    )
+    return environment.materialize(values, environment.data_root / "input" / video)
 
 
 @dataclass(frozen=True, slots=True)

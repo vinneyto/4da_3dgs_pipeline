@@ -22,6 +22,8 @@
 | `RECON_OPENCV_FALLBACK_VERSION` | `opencv_fallback_version` | строка | `4.14.0.94` |
 | `RECON_LOCK_FILE` | `lock_file` | абсолютный путь | `{data}/environment/requirements-lock.txt` |
 | `RECON_NERFSTUDIO_BIN` | `nerfstudio_bin` | абсолютный путь | `{home}/.conda/envs/splatfacto/bin` |
+| `RECON_SPLAT_TRANSFORM_PREFIX` | `splat_transform_prefix` | абсолютный путь | `{home}/.local/share/recon-pipeline/splat-transform` |
+| `RECON_SPLAT_TRANSFORM_VERSION` | `splat_transform_version` | строка | `3.10.0` |
 | `RECON_SPLATFACTO_RERUN_PYTHON` | `splatfacto_rerun_python` | абсолютный путь | `{home}/.conda/envs/splatfacto-rerun/bin/python` |
 | `RECON_SPLATFACTO_TORCH_VERSION` | `splatfacto_torch_version` | строка | `2.2.2` |
 | `RECON_SPLATFACTO_TORCHVISION_VERSION` | `splatfacto_torchvision_version` | строка | `0.17.2` |

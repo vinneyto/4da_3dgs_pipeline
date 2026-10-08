@@ -54,7 +54,11 @@ def _logs(job: AwsBackgroundJob, lines: int, follow: bool) -> None:
 
 
 def _job_from_config(path: Path) -> tuple[AwsBackgroundJob, AwsWorkerConfig]:
-    config = AwsWorkerConfig.from_document(load_document(path))
+    from .requests import ExperimentRequest
+
+    config = AwsWorkerConfig.from_document(
+        ExperimentRequest.from_dict(load_document(path))
+    )
     return AwsBackgroundJob(config.job_id, config.jobs_dir), config
 
 

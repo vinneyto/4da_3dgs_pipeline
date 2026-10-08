@@ -85,3 +85,9 @@ Finalizers запускаются и после успеха, и после ош
 ## Локальное выполнение
 
 В проекте нет общего console command `recon-local-worker`. Для диагностики локально запускайте [утилиты](../reference/utilities.md) с явными путями. `config/local-run.example.json` можно загрузить через `load_pipeline_config(Path(...))`, затем составить `Pipeline` из пасов и начальных артефактов вручную — [Python API](../reference/passes.md).
+
+## Граница worker request
+
+При чтении `request.json` worker вызывает `parse_worker_request` и проверяет все вложенные настройки до запуска операций. Через `isinstance(request, QueueRequest)` выбирается очередь; оставшаяся ветка принимает `ExperimentRequest`. `run_queue` получает только `QueueRequest`, `_run_experiment` — только `ExperimentRequest`.
+
+`build_start_request` также возвращает эти объекты. CLI overrides и отключение shutdown у дочерних экспериментов выполняются через `dataclasses.replace`, без изменения исходного конфига. `AwsBackgroundJob.prepare/start` сохраняют запрос через `request.to_dict()`; дочерний процесс снова разбирает его на границе своего JSON-файла. [Объявления моделей и правила совместимости](../reference/config.md#типизированные-объекты-в-python).

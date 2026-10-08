@@ -6,7 +6,7 @@ Run document schema v7 описывает **эксперимент**, а окр�
 
 | Поле | Обязательность | Смысл |
 | --- | --- | --- |
-| `schema_version` | Обязательно при загрузке | Для новых конфигов `7`; loaders принимают исторические версии 1–7 |
+| `schema_version` | Обязательно при загрузке | Для новых конфигов `7`; loaders принимают версии 1–7, но удалённые поля экспорта больше не мигрируются |
 | `experiment_name` | Нужно для нового переносимого документа | Имя каталога `runs/name` и S3 experiment prefix; не содержит `/`, `\`, `..` |
 | `pipeline` | Обязательно | Typed stages `dataset` и `reconstruction` |
 | `artifacts` | Опционально | Независимые exports/recordings. Отсутствующие задачи выключены |
@@ -15,6 +15,26 @@ Run document schema v7 описывает **эксперимент**, а окр�
 Для новых JSON используйте корневой `experiment_name`. Legacy значение `pipeline.experiment_name` ещё читается; если dataset config также содержит имя, оно должно совпадать. Не все неизвестные ключи корня строго отклоняются: успешное чтение опечатки не означает поддержку поля.
 
 Все defaults ниже относятся к **runtime loader**. CLI generator может явно записывать иные значения: например `recon-config` по умолчанию выбирает `layer_pitches=[0]`, тогда как `FourDAnyoneConfig` — `[-15,0,15]`. Поэтому лучше сохранять параметры эксперимента явно.
+
+## Типизированные объекты в Python
+
+`parse_worker_request` в `workers/aws/requests.py` разбирает JSON в `WorkerRequest = ExperimentRequest | QueueRequest`. Без `kind` создаётся `ExperimentRequest`; `kind="queue"` создаёт очередь с `tuple[ExperimentRequest, ...]`. Любой другой `kind` даёт ошибку до выбора ветки worker.
+
+| Уровень | Класс | Настройки |
+| --- | --- | --- |
+| Эксперимент | `ExperimentRequest` | Schema, имя, pipeline, artifacts, AWS, postprocessing, force |
+| Pipeline | `PipelineSettings` | `DatasetStage` и `ReconstructionStage` |
+| Датасет | `DatasetSettings` | Видео, ракурсы, fps, seed, turbo, resume |
+| Реконструкция | `SplatfactoConfig` | Кадры и профиль обучения |
+| Артефакты | `ArtifactSettings` | `DatasetArtifacts` и `ReconstructionArtifacts` с типизированными exports |
+| AWS | `AwsWorkerSettings` | `BucketConfig`, `SageMakerAppConfig`, `NotificationSettings`, `CloudWatchConfig` |
+| Postprocessing | `PostprocessingConfig` | `SplatConversionConfig` |
+| Очередь | `QueueRequest` | Эксперименты, общие region/App и shutdown policy |
+| Результат извлечения | `DatasetConfiguration` | Имя, `DatasetSettings`, enabled, Nerfstudio, Rerun, reconstruction, postprocessing |
+
+`extract_4danyone_dataset_config` принимает `PipelineSettings` и `ArtifactSettings`, возвращает `DatasetConfiguration`. `AwsWorkerConfig.from_document` и `materialize_pipeline_config` принимают `ExperimentRequest`. `PipelineEnvironment.materialize` добавляет пути через поля объектов и возвращает `FourDAnyoneConfig`. Словари используются при чтении и сохранении JSON, а не для передачи запроса между этапами. Настройки чисел, bool и массивов проверяются при чтении; строка `"false"` не заменяет boolean `false`.
+
+Старые `frame`, `frame_indices`, `export_device` в `pipeline.dataset.config` или плоском `pipeline` отвергаются с указанием `artifacts.dataset.nerfstudio`. Перенесите кадры в `frames`, устройство в `device`, а включение экспорта задайте через `enabled`. Плоский dataset-конфиг без этих полей ещё читается, но больше не включает экспорт по умолчанию. Отсутствие корневого Nerfstudio artifact означает выключенный экспорт. Совместимость AWS aliases и старых environment settings остаётся отдельным механизмом.
 
 ## Полный пример из репозитория
 

@@ -1,3 +1,4 @@
+from pathlib import Path
 import json
 import sys
 from types import SimpleNamespace
@@ -257,7 +258,12 @@ def test_worker_validates_delivery_before_computation_and_captures_failure(
     from recon_pipeline.core import Pipeline
     from recon_pipeline.workers.aws.worker import _run_experiment
     from test_pipeline_core import FakePass
+    from recon_pipeline.workers.aws.requests import ExperimentRequest
 
+    request_document = json.loads(
+        (Path(__file__).parents[1] / "config/run.example.json").read_text()
+    )
+    request = ExperimentRequest.from_dict(request_document)
     logs = Logs()
     capture = session(tmp_path, logs)
     JobStatus(job_id="job").write(capture.job_dir / "status.json")
@@ -274,7 +280,8 @@ def test_worker_validates_delivery_before_computation_and_captures_failure(
         logs.failure = OSError("CloudWatch access denied")
     with capture:
         assert (
-            _run_experiment(capture.job_dir, {}, worker, capture.config, capture) == 1
+            _run_experiment(capture.job_dir, request, worker, capture.config, capture)
+            == 1
         )
     if delivery_fails:
         assert not builds and not computation.calls

@@ -32,20 +32,20 @@ def test_queue_snapshot_and_single_override_preserve_source_files(configs):
     before = [p.read_text() for p in configs]
     job, request = queue.build_start_request(configs, "always", "my-queue")
     assert job.job_id == "my-queue"
-    assert request["kind"] == "queue"
-    assert request["shutdown_on"] == "always"
-    assert [d["aws_worker"]["job_id"] for d in request["configs"]] == [
+    assert request.kind == "queue"
+    assert request.shutdown_on == "always"
+    assert [d.aws_worker.job_id for d in request.configs] == [
         "run-0",
         "run-1",
         "run-2",
     ]
     assert all(
-        "environment" not in d and "local" not in d["aws_worker"]
-        for d in request["configs"]
+        "environment" not in d.to_dict() and "local" not in d.to_dict()["aws_worker"]
+        for d in request.configs
     )
     single, snapshot = queue.build_start_request(configs[:1], "never")
     assert single.job_id == "run-0"
-    assert snapshot["aws_worker"]["shutdown_on"] == "never"
+    assert snapshot.aws_worker.shutdown_on == "never"
     assert before == [p.read_text() for p in configs]
 
 
@@ -93,7 +93,7 @@ def test_queue_runs_sequentially_continues_after_failure_and_shuts_down_last(
     def run_child(child, document):
         index = len(events)
         assert index == int(child.job_id[-1])
-        assert document["aws_worker"]["shutdown_on"] == "never"
+        assert document.aws_worker.shutdown_on == "never"
         child.prepare(document)
         state = "failed" if failed and index == 0 else "succeeded"
         JobStatus(job_id=child.job_id, state=state).write(child.status_path)
@@ -244,7 +244,7 @@ def test_cloudwatch_cli_override_applies_to_all_configs_without_editing_files(co
         args.config, cloudwatch_log_group=args.cloudwatch_log_group
     )
     assert all(
-        d["aws_worker"]["cloudwatch"] == {"log_group": "/recon-pipeline/test"}
-        for d in request["configs"]
+        d.aws_worker.cloudwatch.log_group == "/recon-pipeline/test"
+        for d in request.configs
     )
     assert before == [p.read_text() for p in configs]

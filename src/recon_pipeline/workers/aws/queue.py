@@ -9,35 +9,50 @@ import subprocess
 import sys
 import traceback
 from pathlib import Path
+from dataclasses import replace
+from .requests import ExperimentRequest, QueueRequest, WorkerRequest
 
-from recon_pipeline.run_document import strip_environment
 from .aws import stop_sagemaker_app
 from .config import (
     CloudWatchConfig,
-    load_aws_worker_config,
+    AwsWorkerConfig,
     load_document,
-    SageMakerAppConfig,
 )
 from .job import AwsBackgroundJob
 from .status import JobStatus, utc_now
 
 
 def build_start_request(
-    paths, shutdown_on=None, queue_id=None, force=False, *, cloudwatch_log_group=None
-):
+    paths: list[Path],
+    shutdown_on: str | None = None,
+    queue_id: str | None = None,
+    force: bool = False,
+    *,
+    cloudwatch_log_group: str | None = None,
+) -> tuple[AwsBackgroundJob, WorkerRequest]:
     if not paths:
         raise ValueError("At least one config is required")
     if cloudwatch_log_group is not None:
         CloudWatchConfig(cloudwatch_log_group)
-    requests, workers = [], []
+    requests: list[ExperimentRequest] = []
+    workers: list[AwsWorkerConfig] = []
     for path in paths:
-        _, worker = load_aws_worker_config(path)
-        document = strip_environment(load_document(path))
+        document = ExperimentRequest.from_dict(load_document(path))
+        worker = AwsWorkerConfig.from_document(document)
         if shutdown_on is not None:
-            document["aws_worker"]["shutdown_on"] = shutdown_on
+            document = replace(
+                document,
+                aws_worker=replace(document.aws_worker, shutdown_on=shutdown_on),
+            )
         if cloudwatch_log_group is not None:
-            document["aws_worker"]["cloudwatch"] = {"log_group": cloudwatch_log_group}
-        document["force"] = force
+            document = replace(
+                document,
+                aws_worker=replace(
+                    document.aws_worker,
+                    cloudwatch=CloudWatchConfig(cloudwatch_log_group),
+                ),
+            )
+        document = replace(document, force=force)
         requests.append(document)
         workers.append(worker)
     if len(requests) == 1 and queue_id is None:
@@ -48,7 +63,7 @@ def build_start_request(
             "All queued configs must target the same SageMaker App and region"
         )
     ids = [w.job_id for w in workers]
-    experiments = [d["experiment_name"] for d in requests]
+    experiments = [d.experiment_name for d in requests]
     if len(set(ids)) != len(ids) or len(set(experiments)) != len(experiments):
         raise ValueError(
             "Queued configs must have distinct job IDs and experiment names"
@@ -63,20 +78,15 @@ def build_start_request(
             if not status.terminal and child._process_is_running(status.pid):
                 raise RuntimeError(f"Queued job already running: {worker.job_id}")
     # Preserve the configs' policies in the snapshot; disable them only for children.
-    return job, {
-        "kind": "queue",
-        "configs": requests,
-        "shutdown_on": shutdown_on or workers[-1].shutdown_on,
-        "region": first.region,
-        "sagemaker": {
-            "domain_id": first.sagemaker.domain_id,
-            "space_name": first.sagemaker.space_name,
-            "app_name": first.sagemaker.app_name,
-        },
-    }
+    return job, QueueRequest(
+        tuple(requests),
+        shutdown_on or workers[-1].shutdown_on,
+        first.region,
+        first.sagemaker,
+    )
 
 
-def _run_child(job, request):
+def _run_child(job: AwsBackgroundJob, request: ExperimentRequest) -> int:
     job.prepare(request)
     with job.log_path.open("a") as log:
         process = subprocess.Popen(
@@ -109,14 +119,14 @@ def _run_child(job, request):
             process.stdout.close()
 
 
-def run_queue(job_dir: Path, request: dict) -> int:
+def run_queue(job_dir: Path, request: QueueRequest) -> int:
     status_path = job_dir / "status.json"
     status = JobStatus.read(status_path)
     status.update(state="running", pid=os.getpid(), started_at=utc_now(), stage="queue")
     status.write(status_path)
     results = []
     result_path = job_dir / "queue-result.json"
-    configs = request["configs"]
+    configs = request.configs
     child = None
 
     def save_results():
@@ -132,11 +142,10 @@ def run_queue(job_dir: Path, request: dict) -> int:
     }
     try:
         for index, document in enumerate(configs):
-            child_request = {
-                **document,
-                "aws_worker": {**document["aws_worker"], "shutdown_on": "never"},
-            }
-            child = AwsBackgroundJob(document["aws_worker"]["job_id"], job_dir.parent)
+            child_request = replace(
+                document, aws_worker=replace(document.aws_worker, shutdown_on="never")
+            )
+            child = AwsBackgroundJob(document.aws_worker.job_id, job_dir.parent)
             status.update(
                 stage=child.job_id,
                 progress=index / len(configs),
@@ -192,11 +201,11 @@ def run_queue(job_dir: Path, request: dict) -> int:
         )
         status.write(status_path)
         persistence_failed = any(
-            (job_dir.parent / document["aws_worker"]["job_id"] / marker).exists()
+            (job_dir.parent / document.aws_worker.job_id / marker).exists()
             for document in configs
             for marker in ("s3-persistence-failed", "cloudwatch-persistence-failed")
         )
-        policy = "never" if persistence_failed else request["shutdown_on"]
+        policy = "never" if persistence_failed else request.shutdown_on
         if persistence_failed:
             print(
                 "Queue shutdown deferred: artifacts, diagnostics or CloudWatch logs remain unsaved",
@@ -207,9 +216,7 @@ def run_queue(job_dir: Path, request: dict) -> int:
             or (policy == "success" and not failed)
             or (policy == "failure" and failed)
         ):
-            stop_sagemaker_app(
-                request["region"], SageMakerAppConfig(**request["sagemaker"])
-            )
+            stop_sagemaker_app(request.region, request.sagemaker)
         return int(failed)
     except KeyboardInterrupt:
         if child is not None and child.status_path.exists():

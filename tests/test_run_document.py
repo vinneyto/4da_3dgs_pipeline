@@ -15,9 +15,9 @@ def document(tmp_path: Path) -> dict:
             "experiment_name": "leo",
             "views_per_layer": 24,
             "layer_pitches": [0],
-            "frame": 60,
             "turbo": True,
         },
+        "artifacts": {"dataset": {"nerfstudio": {"frames": [60], "enabled": True}}},
         "aws_worker": {
             "job_id": "leo",
             "shutdown_on": "success",
@@ -51,7 +51,6 @@ def test_local_pipeline_reads_only_pipeline_section(tmp_path: Path) -> None:
         model_dir=str(tmp_path / "models"),
         runs_dir=str(tmp_path / "runs"),
     )
-    payload["pipeline"]["frame_indices"] = [payload["pipeline"].pop("frame")]
     payload["pipeline"]["enable_turbo"] = payload["pipeline"].pop("turbo")
     path = tmp_path / "run.json"
     path.write_text(json.dumps(payload))
@@ -97,7 +96,6 @@ def test_schema_v4_materializes_typed_dataset_stage(tmp_path: Path) -> None:
             "config": {
                 "views_per_layer": 24,
                 "layer_pitches": [0],
-                "frame": 60,
             },
             "artifacts": {"rerun": True},
         },

@@ -7,7 +7,10 @@ import os
 import re
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .requests import ExperimentRequest
 from urllib.parse import urlparse
 
 from recon_pipeline.environment import PipelineEnvironment
@@ -312,26 +315,22 @@ class AwsWorkerConfig:
 
     @classmethod
     def from_document(
-        cls, document: dict[str, Any], environment: PipelineEnvironment | None = None
-    ) -> "AwsWorkerConfig":
-        try:
-            payload = dict(document["aws_worker"])
-        except KeyError as error:
-            raise ValueError("config must contain an aws_worker object") from error
-        if document.get("schema_version", 0) >= 7:
-            validate_environment_free(document)
-        # Old run paths never override this machine's environment.
-        payload["local"] = asdict(cls.workspace_from_environment(environment))
-        if (
-            not isinstance(payload.get("bucket"), dict)
-            and "s3_video_path" not in payload
-        ):
-            pipeline = document.get("pipeline", {})
-            filename = Path(pipeline.get("video_path", pipeline.get("video", ""))).name
-            prefix = str(payload.get("input_prefix", "input")).strip("/")
-            key = "/".join(part for part in (prefix, filename) if part)
-            payload["s3_video_path"] = f"s3://{payload['bucket']}/{key}"
-        return cls.from_dict(payload)
+        cls, document: ExperimentRequest, environment: PipelineEnvironment | None = None
+    ) -> AwsWorkerConfig:
+        settings = document.aws_worker
+        return cls(
+            job_id=settings.job_id,
+            shutdown_on=settings.shutdown_on,
+            region=settings.region,
+            bucket=settings.bucket,
+            sync_models=settings.sync_models,
+            upload_results=settings.upload_results,
+            local=cls.workspace_from_environment(environment),
+            sns=settings.notifications.email,
+            telegram=settings.notifications.telegram,
+            sagemaker=settings.sagemaker,
+            cloudwatch=settings.cloudwatch,
+        )
 
     @staticmethod
     def workspace_from_environment(
@@ -347,61 +346,66 @@ class AwsWorkerConfig:
 
 
 def materialize_pipeline_config(
-    document: dict[str, Any],
+    document: ExperimentRequest,
     worker: AwsWorkerConfig,
     environment: PipelineEnvironment | None = None,
 ) -> FourDAnyoneConfig:
-    """Complete an AWS run's path-free pipeline section with staged local paths."""
-    pipeline_payload = document.get("pipeline", document)
-    payload = extract_4danyone_dataset_config(
-        pipeline_payload,
-        experiment_name=document.get("experiment_name"),
-        artifacts=document.get("artifacts"),
+    """Complete typed portable settings with staged local paths."""
+    settings = extract_4danyone_dataset_config(
+        document.pipeline,
+        experiment_name=document.experiment_name,
+        artifacts=document.artifacts,
+        postprocessing=document.postprocessing,
     )
-    payload["postprocessing"] = document.get("postprocessing")
-    if "turbo" in payload:
-        if "enable_turbo" in payload:
-            raise ValueError("pipeline must use either turbo or enable_turbo, not both")
-        payload["enable_turbo"] = payload.pop("turbo")
     environment = environment or PipelineEnvironment.from_environ()
-    return FourDAnyoneConfig.from_dict(
-        environment.materialize(payload, worker.local_video_path)
+    return environment.materialize(settings, worker.local_video_path)
+
+
+def validate_experiment_request(document: ExperimentRequest) -> None:
+    """Domain validation without resolving any machine environment."""
+    settings = extract_4danyone_dataset_config(
+        document.pipeline,
+        experiment_name=document.experiment_name,
+        artifacts=document.artifacts,
+        postprocessing=document.postprocessing,
+    )
+    dataset = settings.dataset
+    FourDAnyoneConfig(
+        video_path=Path("/validation/input.mov"),
+        experiment_name=settings.experiment_name,
+        fourdanyone_root=Path("/validation"),
+        model_dir=Path("/validation/models"),
+        runs_dir=Path("/validation/runs"),
+        views_per_layer=dataset.views_per_layer,
+        layer_pitches=dataset.layer_pitches,
+        start_yaw=dataset.start_yaw,
+        yaw_span=dataset.yaw_span,
+        target_fps=dataset.target_fps,
+        seed=dataset.seed,
+        enable_turbo=dataset.enable_turbo,
+        attention_backend=dataset.attention_backend,
+        resume=dataset.resume,
+        dataset_enabled=settings.dataset_enabled,
+        nerfstudio=settings.nerfstudio,
+        rerun=settings.rerun,
+        reconstruction=settings.reconstruction,
+        reconstruction_rerun=settings.reconstruction_rerun,
+        postprocessing=settings.postprocessing,
     )
 
 
 def validate_run_settings(document: dict[str, Any]) -> None:
-    """Validate a portable config on any machine, without loading its environment."""
+    """JSON-authoring boundary used by the portable config CLI."""
+    from .requests import ExperimentRequest
+
     validate_environment_free(document)
-    payload = dict(document["aws_worker"])
-    # These placeholders only enable domain validation; they are never serialized
-    # or used to execute a pipeline.
-    payload["local"] = {"data_root": "/validation", "fourdanyone_root": "/validation"}
-    worker = AwsWorkerConfig.from_dict(payload)
-    settings = extract_4danyone_dataset_config(
-        document["pipeline"],
-        experiment_name=document.get("experiment_name"),
-        artifacts=document.get("artifacts"),
-    )
-    settings["postprocessing"] = document.get("postprocessing")
-    settings.pop("video", None)
-    if "turbo" in settings:
-        settings["enable_turbo"] = settings.pop("turbo")
-    FourDAnyoneConfig.from_dict(
-        {
-            **settings,
-            "video_path": worker.local_video_path,
-            "fourdanyone_root": worker.local.fourdanyone_root,
-            "model_dir": worker.local.model_dir,
-            "runs_dir": worker.local.runs_dir,
-        }
-    )
+    ExperimentRequest.from_dict(document)
 
 
 def load_aws_worker_config(path: Path) -> tuple[FourDAnyoneConfig, AwsWorkerConfig]:
-    document = load_document(path)
+    from .requests import ExperimentRequest
+
+    document = ExperimentRequest.from_dict(load_document(path))
     environment = PipelineEnvironment.from_environ()
     worker = AwsWorkerConfig.from_document(document, environment)
-    if "pipeline" not in document:
-        error = KeyError("pipeline")
-        raise ValueError("config must contain a pipeline object") from error
     return materialize_pipeline_config(document, worker, environment), worker

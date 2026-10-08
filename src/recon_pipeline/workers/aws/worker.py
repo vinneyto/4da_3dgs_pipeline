@@ -20,14 +20,16 @@ from .persistence import S3PersistenceObserver
 from .finalizers import SageMakerShutdownFinalizer
 
 from .config import AwsWorkerConfig, materialize_pipeline_config
+from .requests import ExperimentRequest, QueueRequest, parse_worker_request
+from recon_pipeline.datasets.fourdanyone.config import FourDAnyoneConfig
 from .pipeline import build_aws_pipeline, required_source_experiments
 from .status import JobStatus, utc_now
 from .cloudwatch import CloudWatchLogSession
 
 
 def run_worker(job_dir: Path) -> int:
-    request = json.loads((job_dir / "request.json").read_text())
-    if request.get("kind") == "queue":
+    request = parse_worker_request(json.loads((job_dir / "request.json").read_text()))
+    if isinstance(request, QueueRequest):
         from .queue import run_queue
 
         return run_queue(job_dir, request)
@@ -43,7 +45,13 @@ def run_worker(job_dir: Path) -> int:
         return _run_experiment(job_dir, request, worker, config, log_session)
 
 
-def _run_experiment(job_dir, request, worker, config, log_session=None):
+def _run_experiment(
+    job_dir: Path,
+    request: ExperimentRequest,
+    worker: AwsWorkerConfig,
+    config: FourDAnyoneConfig,
+    log_session: CloudWatchLogSession | None = None,
+) -> int:
     status_path = job_dir / "status.json"
     status = JobStatus.read(status_path)
     status.update(pid=os.getpid())
@@ -58,7 +66,7 @@ def _run_experiment(job_dir, request, worker, config, log_session=None):
             config,
             job_dir,
             status,
-            force=bool(request.get("force", False)),
+            force=request.force,
             log_session=log_session,
         )
         plan = pipeline.prepare()

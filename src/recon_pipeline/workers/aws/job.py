@@ -9,7 +9,7 @@ import subprocess
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from .requests import WorkerRequest
 
 from .status import JobStatus, utc_now
 
@@ -50,7 +50,7 @@ class AwsBackgroundJob:
             return True
         return True
 
-    def prepare(self, request: dict[str, Any]) -> JobStatus:
+    def prepare(self, request: WorkerRequest) -> JobStatus:
         """Persist a new attempt before launching its process."""
         if self.status_path.is_file():
             existing = JobStatus.read(self.status_path)
@@ -62,13 +62,13 @@ class AwsBackgroundJob:
 
         self.root.mkdir(parents=True, exist_ok=True)
         self.request_path.write_text(
-            json.dumps(request, indent=2, sort_keys=True) + "\n"
+            json.dumps(request.to_dict(), indent=2, sort_keys=True) + "\n"
         )
         status = JobStatus(job_id=self.job_id)
         status.write(self.status_path)
         return status
 
-    def start(self, request: dict[str, Any]) -> JobStatus:
+    def start(self, request: WorkerRequest) -> JobStatus:
         self.prepare(request)
 
         log_handle = self.log_path.open("ab", buffering=0)

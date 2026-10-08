@@ -1,3 +1,4 @@
+from recon_pipeline.settings import PipelineSettings, ArtifactSettings
 from pathlib import Path
 
 import pytest
@@ -80,109 +81,130 @@ def test_paths_must_be_absolute() -> None:
 
 def test_reconstruction_stage_materializes_splatfacto_profile() -> None:
     payload = extract_4danyone_dataset_config(
-        {
-            "experiment_name": "leo",
-            "dataset": {"type": "4danyone", "config": {}},
-            "reconstruction": {
-                "enabled": True,
-                "type": "nerfstudio_splatfacto",
-                "config": {"frames": [30, 60]},
-            },
-        },
-        artifacts={"dataset": {"nerfstudio": {"enabled": True, "frames": [30, 60]}}},
+        PipelineSettings.from_dict(
+            {
+                "experiment_name": "leo",
+                "dataset": {"type": "4danyone", "config": {}},
+                "reconstruction": {
+                    "enabled": True,
+                    "type": "nerfstudio_splatfacto",
+                    "config": {"frames": [30, 60]},
+                },
+            }
+        ),
+        artifacts=ArtifactSettings.from_dict(
+            {"dataset": {"nerfstudio": {"enabled": True, "frames": [30, 60]}}}
+        ),
     )
-    assert payload["reconstruction"] == {"enabled": True, "frames": [30, 60]}
+    assert payload.reconstruction.enabled is True
+    assert payload.reconstruction.frames == (30, 60)
 
 
 def test_disabled_reconstruction_stage_ignores_unknown_settings() -> None:
     payload = extract_4danyone_dataset_config(
-        {
-            "experiment_name": "leo",
-            "dataset": {"enabled": True, "type": "4danyone", "config": {}},
-            "reconstruction": {
-                "enabled": False,
-                "type": "nerfstudio_splatfacto",
-                "config": {"unknown_future_setting": True},
-            },
-        }
+        PipelineSettings.from_dict(
+            {
+                "experiment_name": "leo",
+                "dataset": {"enabled": True, "type": "4danyone", "config": {}},
+                "reconstruction": {
+                    "enabled": False,
+                    "type": "nerfstudio_splatfacto",
+                    "config": {"unknown_future_setting": True},
+                },
+            }
+        )
     )
 
-    assert payload["experiment_name"] == "leo"
+    assert payload.experiment_name == "leo"
 
 
 def test_disabled_dataset_cannot_run_without_an_artifact() -> None:
     with pytest.raises(ValueError, match="no pipeline stage or artifact"):
         extract_4danyone_dataset_config(
-            {
-                "experiment_name": "leo",
-                "dataset": {"enabled": False, "type": "4danyone"},
-                "reconstruction": {"enabled": False},
-            }
+            PipelineSettings.from_dict(
+                {
+                    "experiment_name": "leo",
+                    "dataset": {"enabled": False, "type": "4danyone"},
+                    "reconstruction": {"enabled": False},
+                }
+            )
         )
 
 
 def test_dataset_rerun_can_run_without_dataset_stage() -> None:
     payload = extract_4danyone_dataset_config(
-        {
-            "dataset": {"enabled": False, "type": "4danyone", "config": {}},
-            "reconstruction": {"enabled": False},
-        },
+        PipelineSettings.from_dict(
+            {
+                "dataset": {"enabled": False, "type": "4danyone", "config": {}},
+                "reconstruction": {"enabled": False},
+            }
+        ),
         experiment_name="rerun-layout-v2",
-        artifacts={
-            "dataset": {
-                "rerun": {
-                    "enabled": True,
-                    "source_experiment_name": "leo-original",
-                    "replace_existing": True,
-                }
-            },
-            "reconstruction": {"rerun": {"enabled": False}},
-        },
+        artifacts=ArtifactSettings.from_dict(
+            {
+                "dataset": {
+                    "rerun": {
+                        "enabled": True,
+                        "source_experiment_name": "leo-original",
+                        "replace_existing": True,
+                    }
+                },
+                "reconstruction": {"rerun": {"enabled": False}},
+            }
+        ),
     )
 
-    assert payload["dataset_enabled"] is False
-    assert payload["experiment_name"] == "rerun-layout-v2"
-    assert payload["rerun"]["source_experiment_name"] == "leo-original"
-    assert payload["rerun"]["replace_existing"] is True
+    assert payload.dataset_enabled is False
+    assert payload.experiment_name == "rerun-layout-v2"
+    assert payload.rerun.source_experiment_name == "leo-original"
+    assert payload.rerun.replace_existing is True
 
 
 def test_nerfstudio_artifact_can_run_without_dataset_stage() -> None:
     payload = extract_4danyone_dataset_config(
-        {
-            "dataset": {"enabled": False, "type": "4danyone", "config": {}},
-            "reconstruction": {"enabled": False},
-        },
+        PipelineSettings.from_dict(
+            {
+                "dataset": {"enabled": False, "type": "4danyone", "config": {}},
+                "reconstruction": {"enabled": False},
+            }
+        ),
         experiment_name="export-v2",
-        artifacts={
-            "dataset": {
-                "nerfstudio": {
-                    "enabled": True,
-                    "source_experiment_name": "leo-original",
-                    "frames": [30, 60, 90],
-                    "device": "cpu",
-                    "replace_existing": True,
+        artifacts=ArtifactSettings.from_dict(
+            {
+                "dataset": {
+                    "nerfstudio": {
+                        "enabled": True,
+                        "source_experiment_name": "leo-original",
+                        "frames": [30, 60, 90],
+                        "device": "cpu",
+                        "replace_existing": True,
+                    },
+                    "rerun": {"enabled": False},
                 },
-                "rerun": {"enabled": False},
-            },
-            "reconstruction": {"rerun": {"enabled": False}},
-        },
+                "reconstruction": {"rerun": {"enabled": False}},
+            }
+        ),
     )
 
-    assert payload["dataset_enabled"] is False
-    assert payload["nerfstudio"]["source_experiment_name"] == "leo-original"
-    assert payload["nerfstudio"]["frames"] == [30, 60, 90]
+    assert payload.dataset_enabled is False
+    assert payload.nerfstudio.source_experiment_name == "leo-original"
+    assert payload.nerfstudio.frames == (30, 60, 90)
 
 
 def test_reconstruction_artifact_is_not_silently_ignored() -> None:
     with pytest.raises(ValueError, match="reconstruction.rerun"):
         extract_4danyone_dataset_config(
-            {
-                "dataset": {"enabled": True, "type": "4danyone", "config": {}},
-                "reconstruction": {"enabled": False},
-            },
+            PipelineSettings.from_dict(
+                {
+                    "dataset": {"enabled": True, "type": "4danyone", "config": {}},
+                    "reconstruction": {"enabled": False},
+                }
+            ),
             experiment_name="leo",
-            artifacts={
-                "dataset": {"rerun": {"enabled": False}},
-                "reconstruction": {"rerun": {"enabled": True}},
-            },
+            artifacts=ArtifactSettings.from_dict(
+                {
+                    "dataset": {"rerun": {"enabled": False}},
+                    "reconstruction": {"rerun": {"enabled": True}},
+                }
+            ),
         )

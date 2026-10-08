@@ -1,0 +1,10 @@
+/* Keep Mermaid's measured SVG size instead of shrinking its labels to fit. */
+.vp-doc .mermaid {
+  overflow-x: auto;
+  margin: 24px 0;
+  padding: 4px;
+}
+
+.vp-doc .mermaid svg {
+  max-width: none;
+}

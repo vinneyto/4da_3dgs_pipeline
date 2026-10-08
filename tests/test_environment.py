@@ -583,3 +583,64 @@ def test_configure_does_not_add_nonexistent_cuda_header_path(monkeypatch, tmp_pa
     )
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout.strip() == "/custom/include"
+
+
+def test_converter_environment_is_materialized_but_not_saved(pipeline_environment):
+    pipeline, _ = load_aws_worker_config(ROOT / "config/splatfacto-run.example.json")
+    assert pipeline.postprocessing.splat_conversion.splat_transform == str(
+        pipeline_environment.splat_transform_prefix / "bin/splat-transform"
+    )
+    assert (
+        "splat_transform"
+        not in pipeline.settings_dict()["postprocessing"]["splat_conversion"]
+    )
+
+
+def test_checker_detects_missing_and_wrong_converter_version(pipeline_environment):
+    prefix = pipeline_environment.splat_transform_prefix
+    report = check_environment()
+    assert (
+        next(c for c in report["checks"] if c["check"] == "splat-transform executable")[
+            "status"
+        ]
+        == "FAIL"
+    )
+    (prefix / "bin").mkdir(parents=True)
+    node = prefix / "bin/node"
+    node.write_text(
+        '#!/bin/sh\nif [ "$2" = "--version" ]; then echo "splat-transform v0.0.0 (fixture)"; else echo v22.0.0; fi\n'
+    )
+    node.chmod(0o755)
+    converter = prefix / "bin/splat-transform"
+    converter.write_text("fixture")
+    converter.chmod(0o755)
+    report = check_environment()
+    assert (
+        next(c for c in report["checks"] if c["check"] == "splat-transform version")[
+            "status"
+        ]
+        == "FAIL"
+    )
+    node.write_text(
+        node.read_text().replace(
+            "v0.0.0", "v" + pipeline_environment.splat_transform_version
+        )
+    )
+    report = check_environment()
+    assert (
+        next(c for c in report["checks"] if c["check"] == "splat-transform version")[
+            "status"
+        ]
+        == "OK"
+    )
+
+
+def test_portable_postprocessing_rejects_machine_paths(tmp_path):
+    from recon_pipeline.workers.aws.config import validate_run_settings
+
+    document = json.loads((ROOT / "config/splatfacto-run.example.json").read_text())
+    document["postprocessing"]["splat_conversion"][
+        "splat_transform"
+    ] = "/machine/bin/splat-transform"
+    with pytest.raises(ValueError, match="machine environment settings"):
+        validate_run_settings(document)

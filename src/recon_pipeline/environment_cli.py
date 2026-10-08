@@ -133,6 +133,8 @@ def configure(env_file: Path, repo: Path) -> None:
             + shlex.quote(str(environment.python.parent))
             + ":"
             + shlex.quote(str(environment.nerfstudio_bin))
+            + ":"
+            + shlex.quote(str(environment.splat_transform_prefix / "bin"))
             + ':"$PATH"',
             f"if [ -x {shlex.quote(str(environment.nerfstudio_bin / 'x86_64-conda-linux-gnu-c++'))} ]; then export CXX={shlex.quote(str(environment.nerfstudio_bin / 'x86_64-conda-linux-gnu-c++'))}; fi",
             'export LD_LIBRARY_PATH="$CUDA_HOME/lib:${LD_LIBRARY_PATH:-}"',
@@ -365,6 +367,42 @@ def check_environment(*, require_cuda: bool = False) -> dict:
     if ns_bin:
         for name in ("ns-train", "ns-export"):
             record(name, executable(ns_bin / name), ns_bin / name)
+    transform_prefix = path("RECON_SPLAT_TRANSFORM_PREFIX")
+    if transform_prefix:
+        node = transform_prefix / "bin/node"
+        converter = transform_prefix / "bin/splat-transform"
+        record("splat-transform Node.js", executable(node), node)
+        record("splat-transform executable", executable(converter), converter)
+        if executable(node):
+            probe(
+                "splat-transform Node.js version",
+                [
+                    str(node),
+                    "-e",
+                    "console.log(process.version); process.exit(Number(process.versions.node.split('.')[0]) >= 22 ? 0 : 1)",
+                ],
+            )
+        if executable(node) and executable(converter):
+            try:
+                completed = subprocess.run(
+                    [str(node), str(converter), "--version"],
+                    capture_output=True,
+                    text=True,
+                    timeout=20,
+                )
+                match = re.search(r"splat-transform v(\S+)", completed.stdout)
+                expected = values.get("RECON_SPLAT_TRANSFORM_VERSION")
+                record(
+                    "splat-transform version",
+                    completed.returncode == 0 and bool(match) and match[1] == expected,
+                    (
+                        f"{completed.stdout.strip()} (expected {expected})"
+                        if completed.returncode == 0
+                        else completed.stderr.strip()
+                    ),
+                )
+            except (OSError, subprocess.TimeoutExpired) as error:
+                record("splat-transform version", False, error)
     cuda_home = path("CUDA_HOME")
     nvcc = (
         cuda_home / "bin/nvcc"

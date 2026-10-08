@@ -23,6 +23,14 @@ def strip_environment(document):
 
         dataset.setdefault("video", Path(dataset.pop("video_path")).name)
     pipeline.get("reconstruction", {}).get("config", {}).pop("nerfstudio_bin", None)
+    postprocessing = result.get("postprocessing")
+    conversion = (
+        postprocessing.get("splat_conversion")
+        if isinstance(postprocessing, dict)
+        else None
+    )
+    if isinstance(conversion, dict):
+        conversion.pop("splat_transform", None)
     rerun = (result.get("artifacts") or {}).get("reconstruction", {}).get("rerun")
     if isinstance(rerun, dict):
         rerun.pop("python", None)

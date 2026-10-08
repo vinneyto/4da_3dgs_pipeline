@@ -1,4 +1,5 @@
 import json
+import os
 import shlex
 import subprocess
 import sys
@@ -80,6 +81,7 @@ root = Path(__file__).parent
 with (root / "calls.jsonl").open("a") as stream:
     stream.write(json.dumps({"tool": Path(__file__).name, "args": args}) + "\\n")
 if Path(__file__).name == "ns-train":
+    assert option("--logging.local-writer.max-log-size") == "0"
     assert option("--pipeline.model.background-color") == "random"
     assert option("--eval-mode") == "all"
     assert option("--pipeline.model.rasterize-mode") == "classic"
@@ -175,7 +177,7 @@ def test_training_cli_uses_profile_and_only_protocol_on_stdout(tmp_path, binarie
     assert result["training_profile"] == asdict(TrainingProfile())
     assert result["full_splat_count"] == 8
     assert validate_ply(Path(result["splat_ply"]), 2) == 8
-    assert any("iteration 7" in event.get("message", "") for event in events)
+    assert not any("iteration 7" in event.get("message", "") for event in events)
     assert "library diagnostic" in completed.stderr
     assert Path(result["dataparser_transform"]).is_file()
     again = subprocess.run(command, capture_output=True, text=True)
@@ -313,3 +315,39 @@ def test_reconstruction_selection_must_be_exported_frames(tmp_path):
             reconstruction=SplatfactoConfig(enabled=True),
             nerfstudio=NerfstudioArtifactConfig(enabled=False),
         )
+
+
+def test_training_progress_is_integer_and_raw_rows_stay_only_in_file(
+    tmp_path, binaries
+):
+    trainer = binaries / "ns-train"
+    trainer.write_text(
+        trainer.read_text().replace(
+            'print("7 (0.01%)  training progress")',
+            'for step in range(0, 60001, 60): print(f"{step} ({step / 600:.1f}%) training progress")',
+        )
+    )
+    command = [
+        sys.executable,
+        "-m",
+        "recon_pipeline.utilities.reconstructions.nerfstudio.splatfacto",
+        "--dataset",
+        str(dataset(tmp_path / "source")),
+        "--output",
+        str(tmp_path / "result"),
+        "--nerfstudio-bin",
+        str(binaries),
+    ]
+    completed = subprocess.run(command, capture_output=True, text=True)
+    assert completed.returncode == 0, completed.stderr
+    events = [json.loads(line) for line in completed.stdout.splitlines()]
+    fractions = [event["fraction"] for event in events if event["event"] == "progress"]
+    assert len(fractions) <= 101
+    assert len(set(fractions)) == len(fractions)
+    assert all(abs(f * 100 - round(f * 100)) < 1e-8 for f in fractions)
+    assert fractions[0] == 0 and fractions[-1] == 1
+    assert "training progress" not in completed.stderr
+    assert "library diagnostic" in completed.stderr
+    assert (tmp_path / "result/logs/train.log").read_text().count(
+        "training progress"
+    ) == 1001

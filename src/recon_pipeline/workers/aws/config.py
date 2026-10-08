@@ -358,6 +358,7 @@ def materialize_pipeline_config(
         experiment_name=document.get("experiment_name"),
         artifacts=document.get("artifacts"),
     )
+    payload["postprocessing"] = document.get("postprocessing")
     if "turbo" in payload:
         if "enable_turbo" in payload:
             raise ValueError("pipeline must use either turbo or enable_turbo, not both")
@@ -381,6 +382,7 @@ def validate_run_settings(document: dict[str, Any]) -> None:
         experiment_name=document.get("experiment_name"),
         artifacts=document.get("artifacts"),
     )
+    settings["postprocessing"] = document.get("postprocessing")
     settings.pop("video", None)
     if "turbo" in settings:
         settings["enable_turbo"] = settings.pop("turbo")

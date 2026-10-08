@@ -538,3 +538,89 @@ def test_template_clone_preserves_nondefault_stages_until_explicit_override(tmp_
     assert not pipeline.reconstruction.enabled
     assert not pipeline.nerfstudio.enabled
     assert not pipeline.rerun.enabled
+
+
+def test_export_formats_are_generated_and_template_overrides_are_optional(tmp_path):
+    output = tmp_path / "run.json"
+    main(
+        [
+            *arguments(output),
+            "--reconstruction",
+            "--splat-conversion",
+            "--splat-conversion-formats",
+            "ply",
+            "spz",
+        ]
+    )
+    assert load_aws_worker_config(output)[
+        0
+    ].postprocessing.splat_conversion.formats == (
+        "ply",
+        "spz",
+    )
+    for extra, expected in [
+        ([], ("ply", "spz")),
+        (["--splat-conversion-formats", "sog"], ("sog",)),
+    ]:
+        target = tmp_path / (expected[-1] + ".json")
+        main(
+            [
+                "--template",
+                str(output),
+                "--output",
+                str(target),
+                "--experiment-name",
+                "clone",
+                *extra,
+            ]
+        )
+        assert (
+            load_aws_worker_config(target)[0].postprocessing.splat_conversion.formats
+            == expected
+        )
+
+
+def test_old_template_adds_optional_postprocessing_and_can_disable_it(tmp_path):
+    source = tmp_path / "old.json"
+    main([*arguments(source), "--reconstruction"])
+    document = json.loads(source.read_text())
+    document.pop("postprocessing")
+    source.write_text(json.dumps(document))
+    copy = tmp_path / "copy.json"
+    main(
+        ["--template", str(source), "--output", str(copy), "--experiment-name", "copy"]
+    )
+    assert not load_aws_worker_config(copy)[0].postprocessing.splat_conversion.enabled
+    converted = tmp_path / "converted.json"
+    main(
+        [
+            "--template",
+            str(source),
+            "--output",
+            str(converted),
+            "--experiment-name",
+            "converted",
+            "--splat-conversion",
+            "--splat-conversion-formats",
+            "spz",
+        ]
+    )
+    assert load_aws_worker_config(converted)[0].postprocessing.splat_conversion.enabled
+    assert (
+        "export_formats"
+        not in json.loads(converted.read_text())["pipeline"]["reconstruction"]["config"]
+    )
+    disabled = tmp_path / "disabled.json"
+    main(
+        [
+            "--template",
+            str(converted),
+            "--output",
+            str(disabled),
+            "--experiment-name",
+            "disabled",
+            "--no-splat-conversion",
+        ]
+    )
+    settings = load_aws_worker_config(disabled)[0].postprocessing.splat_conversion
+    assert settings.enabled is False and settings.formats == ("spz",)

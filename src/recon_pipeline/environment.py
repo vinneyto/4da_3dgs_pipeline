@@ -22,6 +22,8 @@ INSTALL_DEFAULTS = {
     "RECON_TORCH_INDEX_URL": "https://download.pytorch.org/whl/cu126",
     "RECON_OPENCV_FALLBACK_VERSION": "4.14.0.94",
     "RECON_LOCK_FILE": "{data}/environment/requirements-lock.txt",
+    "RECON_SPLAT_TRANSFORM_PREFIX": "{home}/.local/share/recon-pipeline/splat-transform",
+    "RECON_SPLAT_TRANSFORM_VERSION": "3.10.0",
     "RECON_NERFSTUDIO_BIN": "{home}/.conda/envs/splatfacto/bin",
     "RECON_SPLATFACTO_RERUN_PYTHON": "{home}/.conda/envs/splatfacto-rerun/bin/python",
     "RECON_SPLATFACTO_TORCH_VERSION": "2.2.2",
@@ -47,6 +49,8 @@ ENV_NAMES = {
     "opencv_fallback_version": "RECON_OPENCV_FALLBACK_VERSION",
     "lock_file": "RECON_LOCK_FILE",
     "nerfstudio_bin": "RECON_NERFSTUDIO_BIN",
+    "splat_transform_prefix": "RECON_SPLAT_TRANSFORM_PREFIX",
+    "splat_transform_version": "RECON_SPLAT_TRANSFORM_VERSION",
     "splatfacto_rerun_python": "RECON_SPLATFACTO_RERUN_PYTHON",
     "splatfacto_torch_version": "RECON_SPLATFACTO_TORCH_VERSION",
     "splatfacto_torchvision_version": "RECON_SPLATFACTO_TORCHVISION_VERSION",
@@ -64,6 +68,7 @@ PATH_FIELDS = frozenset(
         "data_root",
         "lock_file",
         "nerfstudio_bin",
+        "splat_transform_prefix",
         "splatfacto_rerun_python",
     }
 )
@@ -92,6 +97,8 @@ class PipelineEnvironment:
     torch_index_url: str
     opencv_fallback_version: str
     lock_file: Path
+    splat_transform_prefix: Path
+    splat_transform_version: str
     nerfstudio_bin: Path
     splatfacto_rerun_python: Path
     splatfacto_torch_version: str
@@ -145,6 +152,12 @@ class PipelineEnvironment:
             **values.get("reconstruction", {}),
             "nerfstudio_bin": str(self.nerfstudio_bin),
         }
+        postprocessing = dict(values.get("postprocessing") or {})
+        postprocessing["splat_conversion"] = {
+            **postprocessing.get("splat_conversion", {}),
+            "splat_transform": str(self.splat_transform_prefix / "bin/splat-transform"),
+        }
+        values["postprocessing"] = postprocessing
         rerun = values.get("reconstruction_rerun") or {}
         if isinstance(rerun, bool):
             rerun = {"enabled": rerun}

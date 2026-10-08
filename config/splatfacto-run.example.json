@@ -72,6 +72,16 @@
       }
     }
   },
+  "postprocessing": {
+    "splat_conversion": {
+      "enabled": false,
+      "formats": [
+        "compressed_ply",
+        "spz",
+        "sog"
+      ]
+    }
+  },
   "aws_worker": {
     "job_id": "leo_frame_060_splatfacto_05_official_rgba",
     "region": "us-east-1",

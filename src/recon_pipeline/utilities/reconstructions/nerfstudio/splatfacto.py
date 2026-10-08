@@ -5,14 +5,16 @@ import json
 import os
 import re
 import shutil
-import subprocess
-import sys
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 
-from recon_pipeline.utilities._output import report_progress, run_operation
+from recon_pipeline.utilities._output import (
+    report_progress as emit_progress,
+    run_operation,
+)
 from ._profile import TrainingProfile, add_profile_arguments
+from recon_pipeline.utilities._subprocess import run_logged
 from .prepare_rgba import prepare
 
 
@@ -45,36 +47,16 @@ def validate_ply(path: Path, sh_degree: int) -> int:
     return int(match.group(1))
 
 
-def run_logged(command, log: Path, env, progress=None):
-    print("$ " + " ".join(map(str, command)), file=sys.stderr, flush=True)
-    with log.open("w") as stream:
-        process = subprocess.Popen(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            env=env,
-            bufsize=1,
-        )
-        assert process.stdout is not None
-        try:
-            for line in process.stdout:
-                print(line, end="", file=sys.stderr, flush=True)
-                stream.write(line)
-                stream.flush()
-                if progress:
-                    progress(line)
-        except BaseException:
-            process.kill()
-            raise
-        finally:
-            process.stdout.close()
-            code = process.wait()
-        if code:
-            raise subprocess.CalledProcessError(code, command)
-
-
 def reconstruct(args) -> dict:
+    last_progress = -1
+
+    def report_progress(fraction, message):
+        nonlocal last_progress
+        percent = int(fraction * 100 + 1e-8)
+        if percent > last_progress:
+            last_progress = percent
+            emit_progress(percent / 100, message)
+
     profile = TrainingProfile(
         **{name: getattr(args, name) for name in TrainingProfile.__dataclass_fields__}
     )
@@ -138,6 +120,8 @@ def reconstruct(args) -> dict:
         str(profile.max_num_iterations),
         "--vis",
         "tensorboard",
+        "--logging.local-writer.max-log-size",
+        "0",  # Avoid terminal redraws, repeated headers and historical rows in logs.
         "--pipeline.model.background-color",
         "random",
         "--pipeline.model.rasterize-mode",
@@ -154,18 +138,19 @@ def reconstruct(args) -> dict:
             )
     command.extend(["nerfstudio-data", "--eval-mode", "all"])
     report_progress(0.05, "Training Splatfacto")
-    last_step = -1
 
     def training_progress(line):
-        nonlocal last_step
         plain = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", line).strip()
         match = re.match(r"^(\d+)\s+\([\d.]+%\)", plain)
-        if match and int(match[1]) > last_step:
-            last_step = int(match[1])
+        if match:
+            step = min(int(match[1]), profile.max_num_iterations)
+            percent = 5 + 85 * step // profile.max_num_iterations
             report_progress(
-                0.05 + 0.85 * min(last_step / profile.max_num_iterations, 1),
-                f"Splatfacto iteration {last_step}/{profile.max_num_iterations}",
+                percent / 100,
+                f"Splatfacto iteration {step}/{profile.max_num_iterations}",
             )
+            return False  # Full rows stay in train.log; stdout carries coarse progress.
+        return True
 
     run_logged(command, logs / "train.log", env, training_progress)
     run_root = output / "nerfstudio_outputs" / name / "splatfacto" / timestamp

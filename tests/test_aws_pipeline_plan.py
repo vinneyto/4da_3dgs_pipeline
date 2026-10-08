@@ -153,3 +153,44 @@ def test_shutdown_finalizer_applies_outcome_policy(
     SageMakerShutdownFinalizer(worker).run(PipelineContext(), outcome)
 
     assert bool(calls) is expected
+
+
+def test_postprocessing_runs_after_all_reconstructions_and_recordings(tmp_path):
+    from recon_pipeline.reconstructions.nerfstudio.splatfacto_config import (
+        SplatfactoConfig,
+        SplatfactoRerunConfig,
+    )
+    from recon_pipeline.postprocessing.config import (
+        PostprocessingConfig,
+        SplatConversionConfig,
+    )
+
+    worker = make_worker_config(tmp_path)
+    config = make_pipeline_config(
+        tmp_path,
+        nerfstudio=NerfstudioArtifactConfig(frames=(30, 60)),
+        reconstruction=SplatfactoConfig(enabled=True),
+        reconstruction_rerun=SplatfactoRerunConfig(enabled=True),
+        postprocessing=PostprocessingConfig(
+            SplatConversionConfig(enabled=True, formats=("spz",))
+        ),
+    )
+    ids = [
+        item.id
+        for item in build_aws_pipeline(
+            worker, config, tmp_path / "job", JobStatus(job_id=worker.job_id)
+        )
+        .prepare()
+        .passes
+    ]
+    assert ids.index("splat-convert:frame_030") > ids.index(
+        "s3-upload:splatfacto-rerun:frame_060"
+    )
+    assert ids[-6:] == [
+        "splat-convert:frame_030",
+        "s3-upload:splat-convert:frame_030",
+        "splat-convert:frame_060",
+        "s3-upload:splat-convert:frame_060",
+        "write-run-manifest",
+        "s3-upload:write-run-manifest",
+    ]

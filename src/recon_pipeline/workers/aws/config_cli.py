@@ -9,6 +9,10 @@ from pathlib import Path
 from typing import Any, Sequence
 from urllib.parse import urlparse
 
+from recon_pipeline.utilities.artefacts.splats._formats import (
+    EXPORT_FILENAMES,
+)
+
 from .config import load_document, validate_run_settings
 from recon_pipeline.run_document import SCHEMA_VERSION, strip_environment
 from recon_pipeline.utilities.reconstructions.nerfstudio._profile import (
@@ -112,6 +116,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--reconstruction", action=argparse.BooleanOptionalAction, default=None
     )
     reconstruction.add_argument("--reconstruction-frames", type=int, nargs="+")
+    postprocessing = parser.add_argument_group("Artifact postprocessing")
+    postprocessing.add_argument(
+        "--splat-conversion", action=argparse.BooleanOptionalAction, default=None
+    )
+    postprocessing.add_argument(
+        "--splat-conversion-formats", nargs="+", choices=EXPORT_FILENAMES
+    )
     add_profile_arguments(reconstruction, prefix="splatfacto-")
     reconstruction.add_argument(
         "--reconstruction-rerun", action=argparse.BooleanOptionalAction, default=False
@@ -311,6 +322,14 @@ def build_document_from_template(args: argparse.Namespace) -> dict[str, Any]:
         if value is not None:
             target[key] = value
 
+    if args.splat_conversion is not None or args.splat_conversion_formats is not None:
+        postprocessing = document.get("postprocessing") or {}
+        document["postprocessing"] = postprocessing
+        conversion = postprocessing.setdefault("splat_conversion", {})
+        if args.splat_conversion is not None:
+            conversion["enabled"] = args.splat_conversion
+        if args.splat_conversion_formats is not None:
+            conversion["formats"] = args.splat_conversion_formats
     validate_run_settings(document)
     return document
 
@@ -393,6 +412,13 @@ def build_document(args: argparse.Namespace) -> dict[str, Any]:
                     ),
                 },
             },
+        },
+        "postprocessing": {
+            "splat_conversion": {
+                "enabled": args.splat_conversion or False,
+                "formats": args.splat_conversion_formats
+                or ["compressed_ply", "spz", "sog"],
+            }
         },
         "artifacts": {
             "dataset": {

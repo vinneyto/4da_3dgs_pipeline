@@ -47,9 +47,9 @@ source "$HOME/.config/recon-pipeline/environment.sh"
 
 Edit the example's bucket and SageMaker identifiers before model download. This
 script installs Conda if needed, checks out the pinned 4DAnyone repository and
-GVHMR, creates input/models/runs/jobs/environment folders and installs three
+GVHMR, creates input/models/runs/jobs/environment folders and installs four
 separate persistent environments: 4DAnyone + AWS worker, Nerfstudio/Splatfacto +
-CUDA toolkit/compiler, and Splatfacto Rerun. It also downloads model weights when
+CUDA toolkit/compiler, Splatfacto Rerun, and Node.js/splat-transform. It also downloads model weights when
 `--config` is supplied. Licensed SMPL-X assets must already be provided in your
 bucket; the installer cannot obtain that license for you.
 
@@ -87,7 +87,7 @@ source "$HOME/.config/recon-pipeline/environment.sh"
 ```
 
 This mode installs the pipeline's AWS/Rerun worker extras (including `telebot`),
-writes the package lock and installs Splatfacto and its Rerun environment. It
+writes the package lock and installs Splatfacto, its Rerun environment and splat-transform. It
 skips the 4DAnyone repository setup, requirements and PyTorch installation. Full
 installation selects and persists the Splatfacto toolkit in `CUDA_HOME`.
 
@@ -141,6 +141,8 @@ standalone instructions, is accepted as an alias for `RECON_NERFSTUDIO_BIN`.
 | OpenCV fallback version | `RECON_OPENCV_FALLBACK_VERSION` |
 | 4DAnyone package lock | `RECON_LOCK_FILE` |
 | Splatfacto executables | `RECON_NERFSTUDIO_BIN` |
+| Node.js/splat-transform prefix | `RECON_SPLAT_TRANSFORM_PREFIX` |
+| splat-transform package version | `RECON_SPLAT_TRANSFORM_VERSION` |
 | Splatfacto Rerun interpreter | `RECON_SPLATFACTO_RERUN_PYTHON` |
 | Splatfacto PyTorch and Torchvision | `RECON_SPLATFACTO_TORCH_VERSION`, `RECON_SPLATFACTO_TORCHVISION_VERSION` |
 | Splatfacto wheel index | `RECON_SPLATFACTO_TORCH_INDEX_URL` |
@@ -329,6 +331,7 @@ sequencing, checkpoints and notifications.
 | Prepare workspace | `recon-prepare-experiment` | `utilities.datasets.fourdanyone.prepare_experiment` |
 | Generate dataset | `recon-4danyone` | `utilities.datasets.fourdanyone.inference` |
 | Prepare RGBA training copy | `recon-prepare-rgba` | `utilities.reconstructions.nerfstudio.prepare_rgba` |
+| Convert Gaussian artifacts | `recon-splat-convert` | `utilities.artefacts.splats.convert` |
 | Train and export one frame | `recon-splatfacto` | `utilities.reconstructions.nerfstudio.splatfacto` |
 | Record trained Gaussian scene | `recon-splatfacto-rerun` | `utilities.artefacts.rerun.splatfacto` |
 | Export synchronized frames | `recon-nerfstudio-export` | `utilities.reconstructions.nerfstudio.export` |
@@ -541,6 +544,63 @@ PYTHONPATH="$RECON_PIPELINE_ROOT/src${PYTHONPATH:+:$PYTHONPATH}" \
 
 For preparation alone, run `recon-prepare-rgba --dataset ... --output ... --mask-threshold ... --mask-erosion-pixels ...` in an environment with NumPy, Pillow and OpenCV. Every utility also supports `--help` without GPU imports. Existing standalone output directories require an explicit `--replace-existing`.
 
+Artifact conversion belongs to a root-level `postprocessing` section alongside
+`pipeline`, `artifacts`, and `aws_worker`:
+
+```json
+"postprocessing": {
+  "splat_conversion": {
+    "enabled": true,
+    "formats": ["compressed_ply", "spz", "sog"]
+  }
+}
+```
+
+When absent or disabled, postprocessing adds no passes. Splatfacto always exports
+its full SH source PLY; conversion is a separate final stage after all
+reconstruction and Rerun passes, before the final manifest. The generator accepts
+`--splat-conversion` / `--no-splat-conversion` and
+`--splat-conversion-formats compressed_ply spz sog`, including template overrides.
+Supported formats are `ply` (a source copy), `compressed_ply`, `spz`, and `sog`.
+
+Each frame gets an independently checkpointed `splat-convert:frame_NNN` pass.
+Results, conversion logs and `manifest.json` live in
+`postprocessing/splat_conversion/frame_NNN/`; the files are `splat.ply`,
+`splat.compressed.ply`, `splat.spz`, and `splat.sog` for requested formats.
+The final `pipeline-result.json` lists these separately under
+`postprocessing.splat_conversion`, with each frame's `formats` and
+`exported_artifacts` map. With `upload_results: true`, the conversion bundle is
+published immediately after its pass and restored independently from S3.
+A missing converter, failed conversion or empty output prevents that postprocessing
+pass from completing. Source reconstruction checkpoints remain valid: retrying
+conversion or changing formats does not retrain Splatfacto or regenerate Rerun.
+Removed formats disappear from the local rebuilt bundle; S3 consumers should use
+the latest committed artifact map (previous unreferenced S3 files may remain).
+
+Standalone conversion of an existing artifact requires no reconstruction:
+
+```bash
+recon-splat-convert \
+  --input path/to/splat.ply \
+  --output path/to/postprocessing \
+  --formats compressed_ply spz sog \
+  --splat-transform "$RECON_SPLAT_TRANSFORM_PREFIX/bin/splat-transform"
+```
+
+`./scripts/setup_environment.sh` installs Node.js 22 and
+`@playcanvas/splat-transform` (default version 3.10.0) in the managed
+`RECON_SPLAT_TRANSFORM_PREFIX`. `RECON_SPLAT_TRANSFORM_VERSION` selects the pinned
+package version. Run setup again and source the environment file on an existing
+machine; `--configure-only` adds variables but does not install the converter.
+`./scripts/check_environment.sh` checks the converter, Node.js >=22, and the
+configured package version without running a reconstruction or accessing AWS.
+The standalone conversion utility can use `--splat-transform /absolute/path/to/splat-transform`.
+Conversions run quietly on CPU (`--gpu cpu`) so SOG does not need WebGPU/Vulkan.
+
+Splatfacto utility progress emits at most one event per integer percentage.
+Repeated raw Nerfstudio progress rows are kept in `logs/train.log` instead of
+being echoed to worker/CloudWatch logs; other diagnostics and errors remain live.
+
 Outputs for each frame live in `splatfacto/frame_NNN/`: the RGBA training dataset, Nerfstudio config/checkpoints, `dataparser_transforms.json`, TensorBoard events, training/export logs, `exports/splat.ply`, and `experiment_manifest.json`. The Gaussian PLY is checked for positions, scales, rotations, opacity, DC and higher SH coefficients. `pipeline-result.json` lists all reconstructed frames. With `upload_results: true`, each complete frame folder is uploaded immediately after its reconstruction pass.
 
 For the notebook's optional reconstruction recording, enable `artifacts.reconstruction.rerun.enabled`. Its interpreter comes from `RECON_SPLATFACTO_RERUN_PYTHON`. It needs Rerun 0.36, NumPy, Pillow, plyfile and TensorBoard (the `splatfacto-rerun` extra describes those dependencies). The generator accepts `--reconstruction-rerun`, `--reconstruction-rerun-max-splats` and `--reconstruction-rerun-view-count`.
@@ -602,7 +662,8 @@ The AWS worker checkpoints successful passes locally in the experiment's
 `.recon-pipeline/pass-state.json`. With the existing `aws_worker.upload_results`
 set to `true`, it also adds an upload pass immediately after workspace creation,
 4DAnyone inference, Nerfstudio dataset export, each Splatfacto frame, each Rerun
-export, and the final run manifest. No config schema change is required.
+export, each enabled postprocessing pass, and the final run manifest.
+The optional root `postprocessing` section is compatible with schema 7.
 
 Each upload transfers only its producer's outputs to the existing
 `s3://<bucket>/<runs_prefix>/<experiment>/` layout. A completion record is written

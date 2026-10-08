@@ -30,7 +30,7 @@ def fingerprint(pass_id, settings, input_identity):
         base["settings"] = settings
     elif pass_id == "nerfstudio-export":
         base["export"] = settings["nerfstudio"]
-    elif pass_id.startswith("splatfacto:") or pass_id.startswith("splatfacto-rerun:"):
+    elif pass_id.startswith(("splatfacto:", "splatfacto-rerun:", "splat-convert:")):
         export = dict(settings["nerfstudio"])
         export.pop("frames", None)
         export.pop("replace_existing", None)
@@ -40,6 +40,10 @@ def fingerprint(pass_id, settings, input_identity):
         training.pop("enabled", None)
         base["training"] = training
         base["frame"] = pass_id.rsplit("_", 1)[-1]
+        if pass_id.startswith("splat-convert:"):
+            base["conversion"] = settings.get("postprocessing", {}).get(
+                "splat_conversion", {}
+            )
         if pass_id.startswith("splatfacto-rerun:"):
             base["recording"] = settings["reconstruction_rerun"]
     elif pass_id == "rerun-export":
@@ -58,6 +62,8 @@ def artifact_paths(pipeline_pass, config):
         return [f"splatfacto/frame_{pipeline_pass.frame:03d}"]
     if pipeline_pass.id.startswith("splatfacto-rerun:"):
         return [f"splatfacto/frame_{pipeline_pass.frame:03d}/rerun"]
+    if pipeline_pass.id.startswith("splat-convert:"):
+        return [f"postprocessing/splat_conversion/frame_{pipeline_pass.frame:03d}"]
     if pipeline_pass.id == "rerun-export":
         return [config.rerun_path.relative_to(config.experiment_dir).as_posix()]
     if pipeline_pass.id == "write-run-manifest":
@@ -105,6 +111,17 @@ class RecoverablePass:
             return (
                 Path(trained["splat_ply"]).is_file()
                 and Path(trained["config"]).is_file()
+            )
+        if self.id.startswith("splat-convert:"):
+            converted = next(iter(result.artifacts.values()))
+            return (
+                set(converted.get("exported_artifacts", {}))
+                == set(self.config.postprocessing.splat_conversion.formats)
+                and (Path(converted["output_dir"]) / "manifest.json").is_file()
+                and all(
+                    Path(path).is_file() and Path(path).stat().st_size > 0
+                    for path in converted["exported_artifacts"].values()
+                )
             )
         return all(
             (self.config.experiment_dir / name).exists()

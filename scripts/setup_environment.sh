@@ -121,6 +121,17 @@ stage "Splatfacto headless OpenCV and pipeline package"
 "$NS_PYTHON" -m pip install --editable "$RECON_PIPELINE_ROOT"
 "$NS_PYTHON" -m pip freeze > "$RECON_DATA_ROOT/environment/splatfacto-requirements-lock.txt"
 
+stage "splat-transform Node.js environment"
+if [[ ! -x "$RECON_SPLAT_TRANSFORM_PREFIX/bin/node" ]]; then
+  conda create --prefix "$RECON_SPLAT_TRANSFORM_PREFIX" -y -c conda-forge nodejs=22
+else
+  conda install --prefix "$RECON_SPLAT_TRANSFORM_PREFIX" -y -c conda-forge nodejs=22
+fi
+stage "splat-transform package"
+export PATH="$RECON_SPLAT_TRANSFORM_PREFIX/bin:$PATH"
+"$RECON_SPLAT_TRANSFORM_PREFIX/bin/npm" install --global --prefix "$RECON_SPLAT_TRANSFORM_PREFIX" \
+  "@playcanvas/splat-transform@$RECON_SPLAT_TRANSFORM_VERSION"
+
 RERUN_ENV="$(dirname "$(dirname "$RECON_SPLATFACTO_RERUN_PYTHON")")"
 stage "Splatfacto Rerun environment installation"
 if [[ ! -x "$RECON_SPLATFACTO_RERUN_PYTHON" ]]; then
